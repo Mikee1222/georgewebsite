@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
+    "preinstall": "node -e \"var fs=require('fs'),p=require('path');console.log('[nop-debug] cwd:',process.cwd());console.log('[nop-debug] ls:',fs.readdirSync('.').join(','));var j=p.join(process.cwd(),'package.json');console.log('[nop-debug] package.json:',j);var k=JSON.parse(fs.readFileSync(j,'utf8'));console.log('[nop-debug] name:',k.name,'version:',k.version);\"",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
