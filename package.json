@@ -1,0 +1,45 @@
+{
+  "name": "agency-financial-os",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "start:local": "next build && next start",
+    "clean": "rm -rf .next node_modules package-lock.json",
+    "reset": "npm run clean && npm install",
+    "build:pages": "npx @cloudflare/next-on-pages",
+    "build:cloudflare": "npx @cloudflare/next-on-pages",
+    "preview": "npx wrangler pages dev .vercel/output/static",
+    "lint": "next lint",
+    "lint:ci": "next lint --max-warnings 0",
+    "env:check": "node scripts/env-check.js",
+    "quality": "npm run lint:ci && npm run build",
+    "verify": "npm run lint:ci && npm run build && echo 'Run: npm run start (then use SMOKE.md checklist)'"
+  },
+  "dependencies": {
+    "@radix-ui/react-dialog": "^1.1.15",
+    "@radix-ui/react-select": "^2.2.6",
+    "@radix-ui/react-slot": "^1.2.4",
+    "@tailwindcss/postcss": "^4.1.18",
+    "lucide-react": "^0.563.0",
+    "next": "14.2.18",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "recharts": "^2.15.4"
+  },
+  "devDependencies": {
+    "@cloudflare/next-on-pages": "^1.13.0",
+    "@types/node": "^20.14.0",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "autoprefixer": "^10.4.23",
+    "eslint": "^8.57.0",
+    "eslint-config-next": "14.2.18",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^4.1.18",
+    "typescript": "^5.5.0",
+    "wrangler": "^3.78.0"
+  }
+}
