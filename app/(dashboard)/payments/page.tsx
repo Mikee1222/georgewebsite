@@ -200,6 +200,10 @@ interface PayoutLineRow {
   basis_manual_amount: number;
   bonus_amount: number;
   adjustments_amount: number;
+  /** EUR basis bonus (preview / compute); prefer over bonus_amount in UI. */
+  bonus_eur?: number | null;
+  /** EUR fines/adjustments (preview / compute); prefer over adjustments_amount in UI. */
+  adjustments_eur?: number | null;
   basis_total: number;
   payout_amount: number;
   amount_eur?: number | null;
@@ -217,6 +221,29 @@ interface PayoutLineRow {
   amount_eur_display?: string;
   amount_usd_display?: string;
   payout_flat_fee_display?: string;
+}
+
+function numFromUnknown(v: unknown): number {
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** Prefer bonus_eur from breakdown JSON or row; fall back to legacy bonus / bonus_amount (USD-era). */
+function payoutLineBonusEur(parsed: Record<string, unknown> | null | undefined, row: PayoutLineRow | null | undefined): number {
+  const p = parsed ?? null;
+  if (p && typeof p.bonus_eur === 'number' && Number.isFinite(p.bonus_eur)) return p.bonus_eur;
+  if (row && typeof row.bonus_eur === 'number' && Number.isFinite(row.bonus_eur)) return row.bonus_eur;
+  if (!row) return numFromUnknown(p?.bonus ?? p?.bonus_amount);
+  return numFromUnknown(p?.bonus ?? p?.bonus_amount ?? row.bonus_amount);
+}
+
+/** Prefer adjustments_eur from breakdown JSON or row; fall back to legacy adjustments fields. */
+function payoutLineAdjustmentsEur(parsed: Record<string, unknown> | null | undefined, row: PayoutLineRow | null | undefined): number {
+  const p = parsed ?? null;
+  if (p && typeof p.adjustments_eur === 'number' && Number.isFinite(p.adjustments_eur)) return p.adjustments_eur;
+  if (row && typeof row.adjustments_eur === 'number' && Number.isFinite(row.adjustments_eur)) return row.adjustments_eur;
+  if (!row) return numFromUnknown(p?.adjustments ?? p?.adjustments_amount);
+  return numFromUnknown(p?.adjustments ?? p?.adjustments_amount ?? row.adjustments_amount);
 }
 
 interface PayoutRunRow {
@@ -375,8 +402,8 @@ function BreakdownDialog({
   const basisWebapp = (parsed?.basis_webapp_amount ?? row?.basis_webapp_amount ?? 0) as number;
   const basisManual = (parsed?.basis_manual ?? parsed?.basis_manual_amount ?? row?.basis_manual_amount ?? 0) as number;
   const basisTotal = (parsed?.basis_total ?? row?.basis_total ?? 0) as number;
-  const bonus = (parsed?.bonus ?? parsed?.bonus_amount ?? row?.bonus_amount ?? 0) as number;
-  const adjustments = (parsed?.adjustments ?? parsed?.adjustments_amount ?? row?.adjustments_amount ?? 0) as number;
+  const bonus = payoutLineBonusEur(parsed, row);
+  const adjustments = payoutLineAdjustmentsEur(parsed, row);
   const formula = typeof parsed?.formula === 'string' ? parsed.formula : null;
   const amountEur = row?.amount_eur ?? (row?.currency === 'eur' ? row?.payout_amount : null);
   const amountUsd = row?.amount_usd ?? (row?.currency === 'usd' ? row?.payout_amount : null);
@@ -422,11 +449,11 @@ function BreakdownDialog({
               <dl className="mt-2 space-y-1.5 text-sm">
                 <div className="flex justify-between gap-4">
                   <dt className="text-white/70">Bonus</dt>
-                  <dd className="font-mono tabular-nums text-right text-white/90">{formatNum(bonus)}</dd>
+                  <dd className="font-mono tabular-nums text-right text-white/90">{formatEur2(bonus)}</dd>
                 </div>
                 <div className="flex justify-between gap-4">
                   <dt className="text-white/70">Fines / adjustments</dt>
-                  <dd className="font-mono tabular-nums text-right text-white/90">{formatNum(adjustments)}</dd>
+                  <dd className="font-mono tabular-nums text-right text-white/90">{formatEur2(adjustments)}</dd>
                 </div>
                 {Number(bonus) === 0 && Number(adjustments) === 0 && (
                   <p className="mt-2 text-xs text-white/50">No bonus or adjustment entries for this line.</p>
@@ -588,7 +615,11 @@ function BreakdownRow({
         <td className="py-3 px-4 text-white/70">{row.department}</td>
         <td className="py-3 px-4 text-right"><BasisUsdEur amountUsd={row.basis_webapp_amount} fxRate={fxRate} /></td>
         <td className="py-3 px-4 text-right"><BasisUsdEur amountUsd={row.basis_manual_amount} fxRate={fxRate} /></td>
-        <td className="py-3 px-4 text-right tabular-nums font-mono text-sm text-white/90">{row.bonus_amount_display ?? formatEur2(row.bonus_amount)}</td>
+        <td className="py-3 px-4 text-right tabular-nums font-mono text-sm text-white/90">
+          {typeof row.bonus_eur === 'number' && Number.isFinite(row.bonus_eur)
+            ? formatEur2(row.bonus_eur)
+            : (row.bonus_amount_display ?? formatEur2(row.bonus_amount))}
+        </td>
         <td className="py-3 px-4 text-right"><BasisUsdEur amountUsd={row.basis_total} fxRate={fxRate} /></td>
         <td className="py-3 px-4 text-white/80">{row.payout_type}</td>
         <td className="py-3 px-4 text-right tabular-nums font-mono text-sm text-white/70">{payoutPercentDisplay(row.payout_type, row.payout_percentage, row.role)}</td>
@@ -781,8 +812,8 @@ function BreakdownRow({
                 const basisWebapp = (parsed?.basis_webapp_amount ?? row.basis_webapp_amount ?? 0) as number;
                 const basisManual = (parsed?.basis_manual ?? parsed?.basis_manual_amount ?? row.basis_manual_amount ?? 0) as number;
                 const basisTotal = (parsed?.basis_total ?? row.basis_total ?? 0) as number;
-                const bonus = (parsed?.bonus ?? parsed?.bonus_amount ?? row.bonus_amount ?? 0) as number;
-                const adjustments = (parsed?.adjustments ?? parsed?.adjustments_amount ?? row.adjustments_amount ?? 0) as number;
+                const bonus = payoutLineBonusEur(parsed, row);
+                const adjustments = payoutLineAdjustmentsEur(parsed, row);
                 const formula = typeof parsed?.formula === 'string' ? parsed.formula : null;
                 const amountEur = row.amount_eur ?? (row.currency === 'eur' ? row.payout_amount : null);
                 const amountUsd = row.amount_usd ?? (row.currency === 'usd' ? row.payout_amount : null);
@@ -825,13 +856,13 @@ function BreakdownRow({
                       {Number(bonus) !== 0 && (
                         <>
                           <span className="text-white/60">Bonus</span>
-                          <span className="font-mono tabular-nums text-right text-white/90">{formatNum(bonus)}</span>
+                          <span className="font-mono tabular-nums text-right text-white/90">{formatEur2(bonus)}</span>
                         </>
                       )}
                       {Number(adjustments) !== 0 && (
                         <>
                           <span className="text-white/60">Fines / adjustments</span>
-                          <span className="font-mono tabular-nums text-right text-white/90">{formatNum(adjustments)}</span>
+                          <span className="font-mono tabular-nums text-right text-white/90">{formatEur2(adjustments)}</span>
                         </>
                       )}
                       {eurDisplay && (
@@ -1848,8 +1879,8 @@ function PaymentsPageContent() {
       l.department,
       l.basis_webapp_amount,
       l.basis_manual_amount,
-      l.bonus_amount,
-      l.adjustments_amount,
+      typeof l.bonus_eur === 'number' && Number.isFinite(l.bonus_eur) ? l.bonus_eur : l.bonus_amount,
+      typeof l.adjustments_eur === 'number' && Number.isFinite(l.adjustments_eur) ? l.adjustments_eur : l.adjustments_amount,
       l.payout_amount,
       l.currency,
     ]);

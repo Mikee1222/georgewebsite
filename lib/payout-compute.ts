@@ -215,6 +215,15 @@ export async function computePreviewPayouts(
     if (!teamMemberIdsSet.has(tmId)) continue;
     if (!basisByMemberEur[tmId]) basisByMemberEur[tmId] = { bonus: 0, adjustment: 0 };
     const type = (r.fields.basis_type ?? '') as BasisType;
+    if (process.env.NODE_ENV === 'development' && (r.fields.basis_type === 'bonus' || r.fields.basis_type === 'fine')) {
+      console.log('[debug bonus fields]', {
+        id: r.id,
+        basis_type: r.fields.basis_type,
+        amount: r.fields.amount,
+        amount_usd: r.fields.amount_usd,
+        amount_eur: r.fields.amount_eur,
+      });
+    }
     const valueEur = typeof r.fields.amount_eur === 'number' ? r.fields.amount_eur : (typeof r.fields.amount === 'number' ? r.fields.amount : 0);
     if (type === 'bonus') basisByMemberEur[tmId].bonus += valueEur;
     else if (type === 'adjustment' || type === 'fine') basisByMemberEur[tmId].adjustment += valueEur;
