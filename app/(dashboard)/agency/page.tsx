@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { SELECT_ALL } from '@/lib/select-constants';
-import AgencyGrid from '../../components/AgencyGrid';
+import AgencyGrid, { type AgencyGridSortKey } from '../../components/AgencyGrid';
 import SmartSelect from '../../components/ui/SmartSelect';
 import TableSkeleton from '../../components/ui/TableSkeleton';
 import CardSkeleton from '../../components/ui/CardSkeleton';
@@ -70,9 +70,9 @@ function formatRefreshTime(date: Date): string {
 
 function marginBadge(margin: number): { label: string; color: string } {
   const c = getMarginColor(margin, null);
-  if (c === 'green') return { label: 'good', color: 'text-[var(--green)]' };
-  if (c === 'yellow') return { label: 'ok', color: 'text-[var(--yellow)]' };
-  return { label: 'low', color: 'text-[var(--red)]' };
+  if (c === 'green') return { label: 'excellent', color: 'text-[var(--green)]' };
+  if (c === 'yellow') return { label: 'good', color: 'text-[var(--yellow)]' };
+  return { label: 'bad', color: 'text-[var(--red)]' };
 }
 
 const DEPT_COLORS: Record<string, string> = {
@@ -94,11 +94,11 @@ export default function AgencyPage() {
   const [entriesData, setEntriesData] = useState<EntriesResponse | null>(null);
   const [pnlData, setPnlData] = useState<AgencyRow[]>([]);
   const [agencyTotals, setAgencyTotals] = useState<AgencyMasterResponse['totals'] | null>(null);
-  const [payoutsMode, setPayoutsMode] = useState<'owed' | 'paid'>('owed');
-  const [payoutsSource, setPayoutsSource] = useState<'live' | 'locked'>('live');
+  const [payoutsMode, setPayoutsMode] = useState<'paid' | 'all'>('all');
+  const [payoutsSource, setPayoutsSource] = useState<'live' | 'locked' | 'saved_run'>('live');
   const [loading, setLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
-  const [sortKey, setSortKey] = useState<keyof AgencyRow>('net_profit');
+  const [sortKey, setSortKey] = useState<AgencyGridSortKey>('net_profit');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [selectedMonthId, setSelectedMonthId] = useState('');
   const [error, setError] = useState<{ message: string; requestId: string | null } | null>(null);
@@ -193,11 +193,14 @@ export default function AgencyPage() {
 
   const sorted = useMemo(() => {
     const arr = [...pnlData];
+    const sortValue = (r: AgencyRow, key: AgencyGridSortKey): number => {
+      if (key === 'agency_cut_usd') return r.net_after_payouts_usd ?? 0;
+      const v = r[key as keyof AgencyRow];
+      return typeof v === 'number' ? v : 0;
+    };
     arr.sort((a, b) => {
-      const va = a[sortKey];
-      const vb = b[sortKey];
-      const numA = typeof va === 'number' ? va : 0;
-      const numB = typeof vb === 'number' ? vb : 0;
+      const numA = sortValue(a, sortKey);
+      const numB = sortValue(b, sortKey);
       if (sortDir === 'asc') return numA > numB ? 1 : numA < numB ? -1 : 0;
       return numB > numA ? 1 : numB < numA ? -1 : 0;
     });
@@ -327,20 +330,21 @@ export default function AgencyPage() {
                 <span className="text-sm text-white/70">Payouts</span>
                 <SmartSelect
                   value={payoutsMode}
-                  onChange={(v) => setPayoutsMode(v as 'owed' | 'paid')}
+                  onChange={(v) => setPayoutsMode(v as 'paid' | 'all')}
                   options={[
-                    { value: 'owed', label: 'Owed' },
+                    { value: 'all', label: 'All' },
                     { value: 'paid', label: 'Paid' },
                   ]}
-                  placeholder="Owed"
+                  placeholder="All"
                 />
                 <span className="text-sm text-white/70">Source</span>
                 <SmartSelect
                   value={payoutsSource}
-                  onChange={(v) => setPayoutsSource(v as 'live' | 'locked')}
+                  onChange={(v) => setPayoutsSource(v as 'live' | 'locked' | 'saved_run')}
                   options={[
                     { value: 'live', label: 'Live' },
                     { value: 'locked', label: 'Locked' },
+                    { value: 'saved_run', label: 'Saved run' },
                   ]}
                   placeholder="Live"
                 />
@@ -431,9 +435,9 @@ export default function AgencyPage() {
                     className={`rounded px-1.5 py-0.5 text-[10px] font-medium uppercase ${marginBadgeInfo.color}`}
                     style={{
                       background:
-                        marginBadgeInfo.label === 'good'
+                        marginBadgeInfo.label === 'excellent'
                           ? 'var(--green-dim)'
-                          : marginBadgeInfo.label === 'ok'
+                          : marginBadgeInfo.label === 'good'
                             ? 'var(--yellow-dim)'
                             : 'var(--red-dim)',
                     }}
@@ -652,7 +656,11 @@ export default function AgencyPage() {
                     className={`rounded px-1.5 py-0.5 text-[10px] font-medium uppercase ${marginBadgeInfo.color}`}
                     style={{
                       background:
-                        marginBadgeInfo.label === 'good' ? 'var(--green-dim)' : marginBadgeInfo.label === 'ok' ? 'var(--yellow-dim)' : 'var(--red-dim)',
+                        marginBadgeInfo.label === 'excellent'
+                          ? 'var(--green-dim)'
+                          : marginBadgeInfo.label === 'good'
+                            ? 'var(--yellow-dim)'
+                            : 'var(--red-dim)',
                     }}
                   >
                     {marginBadgeInfo.label}

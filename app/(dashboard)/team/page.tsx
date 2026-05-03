@@ -119,6 +119,8 @@ const DEFAULT_MEMBER_FORM = {
   chatting_percentage_messages_tips: 0 as number,
   gunzo_percentage: 0 as number,
   gunzo_percentage_messages_tips: 0 as number,
+  chatting_percentage_no_subs: 0 as number,
+  gunzo_percentage_no_subs: 0 as number,
   payout_flat_fee: '' as string | number,
   payout_frequency: 'monthly' as string,
   models_scope: [] as string[],
@@ -126,6 +128,8 @@ const DEFAULT_MEMBER_FORM = {
 };
 
 const isDev = typeof process !== 'undefined' && process.env.NODE_ENV === 'development';
+
+type EditMemberFormState = typeof DEFAULT_MEMBER_FORM & { payout_percentage?: string | number };
 
 export default function TeamPage() {
   const [tab, setTab] = useState<TabKey>('users');
@@ -192,7 +196,8 @@ export default function TeamPage() {
   const [editModelErrors, setEditModelErrors] = useState<{ deal_threshold?: string; deal_flat_under_threshold?: string; deal_percent_above_threshold?: string }>({});
   const [editModelBusy, setEditModelBusy] = useState(false);
   const [deleteModel, setDeleteModel] = useState<ModelRow | null>(null);
-  const [deleteModelBusy, setDeleteModelBusy] = useState(false);
+  const [pendingModelDeleteMode, setPendingModelDeleteMode] = useState<'soft' | 'hard' | null>(null);
+  const deleteModelBusy = pendingModelDeleteMode !== null;
 
   const { rate: fxRate } = useFxRate();
 
@@ -207,21 +212,7 @@ export default function TeamPage() {
   const [addMemberForm, setAddMemberForm] = useState(DEFAULT_MEMBER_FORM);
   const [addMemberBusy, setAddMemberBusy] = useState(false);
   const [editMember, setEditMember] = useState<TeamMember | null>(null);
-  const [editMemberForm, setEditMemberForm] = useState<{
-    name: string;
-    email: string;
-    department: string;
-    role: string;
-    status: string;
-    notes: string;
-    model_id: string;
-    payout_type: string;
-    payout_percentage?: string | number;
-    payout_flat_fee: string | number;
-    payout_frequency: string;
-    models_scope: string[];
-    payout_scope: 'agency_total_net' | 'messages_tips_net';
-  }>(DEFAULT_MEMBER_FORM);
+  const [editMemberForm, setEditMemberForm] = useState<EditMemberFormState>(DEFAULT_MEMBER_FORM);
   const [editMemberBusy, setEditMemberBusy] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
@@ -631,13 +622,15 @@ export default function TeamPage() {
       .finally(() => setEditModelBusy(false));
   };
 
-  const handleDeleteModel = (m: ModelRow) => {
+  const handleSetModelInactive = () => {
+    const m = deleteModel;
+    if (!m || pendingModelDeleteMode) return;
     if (m.status !== 'Active') {
       showToast('Already inactive', 'error');
       return;
     }
-    setDeleteModelBusy(true);
-    fetch(`/api/models/${m.id}`, { method: 'DELETE', credentials: 'include' })
+    setPendingModelDeleteMode('soft');
+    fetch(`/api/models/${encodeURIComponent(m.id)}?mode=soft`, { method: 'DELETE', credentials: 'include' })
       .then((r) => r.json().catch(() => ({})))
       .then((data: { error?: string }) => {
         if (data.error) {
@@ -648,7 +641,25 @@ export default function TeamPage() {
         setDeleteModel(null);
         showToast('Model set to Inactive', 'success');
       })
-      .finally(() => setDeleteModelBusy(false));
+      .finally(() => setPendingModelDeleteMode(null));
+  };
+
+  const handleHardDeleteModel = () => {
+    const m = deleteModel;
+    if (!m || pendingModelDeleteMode) return;
+    setPendingModelDeleteMode('hard');
+    fetch(`/api/models/${encodeURIComponent(m.id)}?mode=hard`, { method: 'DELETE', credentials: 'include' })
+      .then((r) => r.json().catch(() => ({})))
+      .then((data: { error?: string; ok?: boolean; deleted?: boolean }) => {
+        if (data.error || !data.ok || !data.deleted) {
+          showToast(data.error ?? 'Hard delete failed', 'error');
+          return;
+        }
+        setModels((prev) => prev.filter((x) => x.id !== m.id));
+        setDeleteModel(null);
+        showToast('Model permanently removed', 'success');
+      })
+      .finally(() => setPendingModelDeleteMode(null));
   };
 
   const handleAddMember = (e: React.FormEvent) => {
@@ -681,11 +692,15 @@ export default function TeamPage() {
         const chattingMsgsPct = Number(addMemberForm.chatting_percentage_messages_tips ?? 0);
         const gunzoPct = Number(addMemberForm.gunzo_percentage ?? 0);
         const gunzoMsgsPct = Number(addMemberForm.gunzo_percentage_messages_tips ?? 0);
+        const chattingNoSubsPct = Number(addMemberForm.chatting_percentage_no_subs ?? 0);
+        const gunzoNoSubsPct = Number(addMemberForm.gunzo_percentage_no_subs ?? 0);
 
         if (chattingPct < 0 || chattingPct > 100 ||
             chattingMsgsPct < 0 || chattingMsgsPct > 100 ||
             gunzoPct < 0 || gunzoPct > 100 ||
-            gunzoMsgsPct < 0 || gunzoMsgsPct > 100) {
+            gunzoMsgsPct < 0 || gunzoMsgsPct > 100 ||
+            chattingNoSubsPct < 0 || chattingNoSubsPct > 100 ||
+            gunzoNoSubsPct < 0 || gunzoNoSubsPct > 100) {
           showToast('All percentages must be 0–100', 'error');
           return;
         }
@@ -695,6 +710,14 @@ export default function TeamPage() {
         }
         if (gunzoPct > 0 && gunzoMsgsPct > 0) {
           showToast('Cannot use both total and messages+tips for gunzo', 'error');
+          return;
+        }
+        if (chattingPct > 0 && chattingNoSubsPct > 0) {
+          showToast('Cannot use both agency total net and no-subscriptions for chatting', 'error');
+          return;
+        }
+        if (gunzoPct > 0 && gunzoNoSubsPct > 0) {
+          showToast('Cannot use both agency total net and no-subscriptions for gunzo', 'error');
           return;
         }
       }
@@ -723,6 +746,10 @@ export default function TeamPage() {
         addMemberForm.role !== 'chatter' ? Number(addMemberForm.gunzo_percentage ?? 0) : undefined,
       gunzo_percentage_messages_tips:
         addMemberForm.role !== 'chatter' ? Number(addMemberForm.gunzo_percentage_messages_tips ?? 0) : undefined,
+      chatting_percentage_no_subs:
+        addMemberForm.role !== 'chatter' ? Number(addMemberForm.chatting_percentage_no_subs ?? 0) : undefined,
+      gunzo_percentage_no_subs:
+        addMemberForm.role !== 'chatter' ? Number(addMemberForm.gunzo_percentage_no_subs ?? 0) : undefined,
       payout_flat_fee: pt === 'flat_fee' || pt === 'hybrid' ? (addMemberForm.payout_flat_fee !== '' ? Number(addMemberForm.payout_flat_fee) : undefined) : undefined,
       models_scope: addMemberForm.role === 'chatting_manager' && addMemberForm.models_scope?.length ? addMemberForm.models_scope : undefined,
       payout_scope:
@@ -762,7 +789,59 @@ export default function TeamPage() {
       showToast('Role is not allowed for the selected department', 'error');
       return;
     }
+    const isChatterEdit = editMemberForm.role === 'chatter';
+    if (pt === 'percentage' || pt === 'hybrid') {
+      if (isChatterEdit) {
+        const pct = Number(editMemberForm.payout_percentage_chatters);
+        if (Number.isNaN(pct) || pct <= 0 || pct > 100) {
+          showToast('Payout % (chatters) must be 0–100', 'error');
+          return;
+        }
+      } else {
+        const chattingPct = Number(editMemberForm.chatting_percentage ?? 0);
+        const chattingMsgsPct = Number(editMemberForm.chatting_percentage_messages_tips ?? 0);
+        const gunzoPct = Number(editMemberForm.gunzo_percentage ?? 0);
+        const gunzoMsgsPct = Number(editMemberForm.gunzo_percentage_messages_tips ?? 0);
+        const chattingNoSubsPct = Number(editMemberForm.chatting_percentage_no_subs ?? 0);
+        const gunzoNoSubsPct = Number(editMemberForm.gunzo_percentage_no_subs ?? 0);
+        if (chattingPct < 0 || chattingPct > 100 ||
+            chattingMsgsPct < 0 || chattingMsgsPct > 100 ||
+            gunzoPct < 0 || gunzoPct > 100 ||
+            gunzoMsgsPct < 0 || gunzoMsgsPct > 100 ||
+            chattingNoSubsPct < 0 || chattingNoSubsPct > 100 ||
+            gunzoNoSubsPct < 0 || gunzoNoSubsPct > 100) {
+          showToast('All percentages must be 0–100', 'error');
+          return;
+        }
+        if (chattingPct > 0 && chattingMsgsPct > 0) {
+          showToast('Cannot use both total and messages+tips for chatting', 'error');
+          return;
+        }
+        if (gunzoPct > 0 && gunzoMsgsPct > 0) {
+          showToast('Cannot use both total and messages+tips for gunzo', 'error');
+          return;
+        }
+        if (chattingPct > 0 && chattingNoSubsPct > 0) {
+          showToast('Cannot use both agency total net and no-subscriptions for chatting', 'error');
+          return;
+        }
+        if (gunzoPct > 0 && gunzoNoSubsPct > 0) {
+          showToast('Cannot use both agency total net and no-subscriptions for gunzo', 'error');
+          return;
+        }
+      }
+    }
     setEditMemberBusy(true);
+    const payoutPctForValidate =
+      pt === 'percentage' || pt === 'hybrid'
+        ? isChatterEdit
+          ? Number(editMemberForm.payout_percentage_chatters)
+          : Number(
+              editMemberForm.payout_percentage !== '' && editMemberForm.payout_percentage !== undefined
+                ? editMemberForm.payout_percentage
+                : (editMember?.payout_percentage ?? 0)
+            )
+        : undefined;
     const payload = {
       name: editMemberForm.name.trim(),
       email: editMemberForm.email.trim() || undefined,
@@ -771,6 +850,11 @@ export default function TeamPage() {
       status: editMemberForm.status,
       notes: editMemberForm.notes.trim() || undefined,
       payout_type: pt,
+      payout_percentage: payoutPctForValidate,
+      payout_percentage_chatters:
+        isChatterEdit && (pt === 'percentage' || pt === 'hybrid')
+          ? Number(editMemberForm.payout_percentage_chatters)
+          : undefined,
       payout_frequency: pt !== 'none' ? (editMemberForm.payout_frequency || 'monthly') : 'monthly',
       payout_flat_fee: pt === 'flat_fee' || pt === 'hybrid' ? (editMemberForm.payout_flat_fee !== '' ? Number(editMemberForm.payout_flat_fee) : undefined) : undefined,
       models_scope: editMemberForm.role === 'chatting_manager' ? (editMemberForm.models_scope ?? []) : [],
@@ -778,6 +862,12 @@ export default function TeamPage() {
         editMemberForm.role.toLowerCase().includes('manager')
           ? (editMemberForm.payout_scope ?? 'agency_total_net')
           : undefined,
+      chatting_percentage: !isChatterEdit ? Number(editMemberForm.chatting_percentage ?? 0) : undefined,
+      chatting_percentage_messages_tips: !isChatterEdit ? Number(editMemberForm.chatting_percentage_messages_tips ?? 0) : undefined,
+      gunzo_percentage: !isChatterEdit ? Number(editMemberForm.gunzo_percentage ?? 0) : undefined,
+      gunzo_percentage_messages_tips: !isChatterEdit ? Number(editMemberForm.gunzo_percentage_messages_tips ?? 0) : undefined,
+      chatting_percentage_no_subs: !isChatterEdit ? Number(editMemberForm.chatting_percentage_no_subs ?? 0) : undefined,
+      gunzo_percentage_no_subs: !isChatterEdit ? Number(editMemberForm.gunzo_percentage_no_subs ?? 0) : undefined,
     };
     fetch(`/api/team-members/${editMember.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(payload) })
       .then((r) => r.json().catch(() => ({})))
@@ -1123,7 +1213,7 @@ export default function TeamPage() {
                           <td className={tdMuted}>{m.model_id ? (modelIdToName[m.model_id] ?? m.model_id) : '—'}</td>
                           {canManageMembers && (
                             <td className="px-4 py-3 flex gap-2">
-                              <button type="button" onClick={() => { setEditMember(m); setEditMemberForm({ ...DEFAULT_MEMBER_FORM, name: m.name, email: m.email ?? '', department: (m.department as string) ?? '', role: (m.role as string) ?? '', status: (m.status as string) ?? '', notes: m.notes ?? '', model_id: m.model_id ?? '', payout_type: m.payout_type ?? 'none', payout_flat_fee: m.payout_flat_fee ?? '', payout_frequency: m.payout_frequency ?? 'monthly', models_scope: Array.isArray(m.models_scope) ? m.models_scope : [] }); }} className="text-purple-300 hover:underline text-xs">Edit</button>
+                              <button type="button" onClick={() => { setEditMember(m); setEditMemberForm({ ...DEFAULT_MEMBER_FORM, name: m.name, email: m.email ?? '', department: (m.department as string) ?? '', role: (m.role as string) ?? '', status: (m.status as string) ?? '', notes: m.notes ?? '', model_id: m.model_id ?? '', payout_type: m.payout_type ?? 'none', payout_percentage: m.payout_percentage ?? '', payout_percentage_chatters: m.payout_percentage_chatters ?? m.payout_percentage ?? '', payout_flat_fee: m.payout_flat_fee ?? '', payout_frequency: m.payout_frequency ?? 'monthly', models_scope: Array.isArray(m.models_scope) ? m.models_scope : [], payout_scope: m.payout_scope ?? 'agency_total_net', chatting_percentage: m.chatting_percentage ?? 0, chatting_percentage_messages_tips: m.chatting_percentage_messages_tips ?? 0, gunzo_percentage: m.gunzo_percentage ?? 0, gunzo_percentage_messages_tips: m.gunzo_percentage_messages_tips ?? 0, chatting_percentage_no_subs: m.chatting_percentage_no_subs ?? 0, gunzo_percentage_no_subs: m.gunzo_percentage_no_subs ?? 0 }); }} className="text-purple-300 hover:underline text-xs">Edit</button>
                               <button type="button" onClick={() => setDeleteConfirmId(m.id)} className="text-red-300 hover:underline text-xs">Delete</button>
                             </td>
                           )}
@@ -1429,12 +1519,34 @@ export default function TeamPage() {
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm" onClick={() => !deleteModelBusy && setDeleteModel(null)}>
             <div className="w-full max-w-sm rounded-2xl border border-white/10 bg-zinc-950/85 p-6 shadow-xl backdrop-blur-xl" onClick={(e) => e.stopPropagation()}>
               <h3 className="mb-2 text-lg font-semibold text-[var(--text)]">Delete model</h3>
-              <p className="mb-4 text-sm text-[var(--text-muted)]">
-                This will set the model to Inactive and hide it from Active models. You can re-activate later.
+              <p className="mb-3 text-sm text-[var(--text-muted)]">
+                Set Inactive keeps the record in Airtable and hides the model from active lists. Hard delete removes the row entirely.
               </p>
-              <div className="flex gap-2">
-                <button type="button" onClick={() => handleDeleteModel(deleteModel)} className="btn-primary flex-1 rounded-lg py-2 text-sm" disabled={deleteModelBusy}>{deleteModelBusy ? 'Deleting…' : 'Delete'}</button>
-                <button type="button" onClick={() => !deleteModelBusy && setDeleteModel(null)} className="btn flex-1 rounded-lg py-2 text-sm" disabled={deleteModelBusy}>Cancel</button>
+              <div className="flex flex-col gap-2">
+                <button
+                  type="button"
+                  onClick={handleSetModelInactive}
+                  className="btn-primary w-full rounded-lg py-2 text-sm"
+                  disabled={deleteModelBusy}
+                >
+                  {pendingModelDeleteMode === 'soft' ? 'Updating…' : 'Set Inactive'}
+                </button>
+                <div>
+                  <button
+                    type="button"
+                    onClick={handleHardDeleteModel}
+                    className="w-full rounded-lg border border-red-500/40 bg-red-950/40 py-2 text-sm font-medium text-red-200 hover:bg-red-950/60 disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={deleteModelBusy}
+                  >
+                    {pendingModelDeleteMode === 'hard' ? 'Deleting…' : 'Hard Delete'}
+                  </button>
+                  <p className="mt-1.5 text-xs text-red-400/70">This permanently removes the model from Airtable.</p>
+                </div>
+              </div>
+              <div className="mt-4 flex gap-2">
+                <button type="button" onClick={() => !deleteModelBusy && setDeleteModel(null)} className="btn flex-1 rounded-lg py-2 text-sm" disabled={deleteModelBusy}>
+                  Cancel
+                </button>
               </div>
             </div>
           </div>
@@ -1559,6 +1671,44 @@ export default function TeamPage() {
                                 className="glass-input w-full"
                               />
                             </div>
+                            <div>
+                              <label className="mb-1 block text-xs font-medium text-[var(--text-muted)]">
+                                Chatting % (no subscriptions)
+                              </label>
+                              <input
+                                type="number"
+                                min={0}
+                                max={100}
+                                step={0.1}
+                                value={addMemberForm.chatting_percentage_no_subs}
+                                onChange={(e) =>
+                                  setAddMemberForm((f) => ({
+                                    ...f,
+                                    chatting_percentage_no_subs: Number(e.target.value || 0),
+                                  }))
+                                }
+                                className="glass-input w-full"
+                              />
+                            </div>
+                            <div>
+                              <label className="mb-1 block text-xs font-medium text-[var(--text-muted)]">
+                                Gunzo % (no subscriptions)
+                              </label>
+                              <input
+                                type="number"
+                                min={0}
+                                max={100}
+                                step={0.1}
+                                value={addMemberForm.gunzo_percentage_no_subs}
+                                onChange={(e) =>
+                                  setAddMemberForm((f) => ({
+                                    ...f,
+                                    gunzo_percentage_no_subs: Number(e.target.value || 0),
+                                  }))
+                                }
+                                className="glass-input w-full"
+                              />
+                            </div>
                           </>
                         )}
                       </>
@@ -1634,23 +1784,144 @@ export default function TeamPage() {
                   <div className="space-y-3">
                     <SmartSelect label="Payout type" value={editMemberForm.payout_type || 'none'} onChange={(v) => setEditMemberForm((f) => ({ ...f, payout_type: v || 'none' }))} options={PAYOUT_TYPES.map((t) => ({ value: t, label: t }))} />
                     {(editMemberForm.payout_type === 'percentage' || editMemberForm.payout_type === 'hybrid') && (
-                      <div>
-                        <label className="mb-1 block text-xs font-medium text-[var(--text-muted)]">Payout % (0–100)</label>
-                        <input
-                          type="number"
-                          min={0}
-                          max={100}
-                          step={0.1}
-                          value={editMemberForm.payout_percentage as any}
-                          onChange={(e) =>
-                            setEditMemberForm((f) => ({
-                              ...f,
-                              payout_percentage: e.target.value as any,
-                            }))
-                          }
-                          className="glass-input w-full"
-                        />
-                      </div>
+                      <>
+                        {editMemberForm.role === 'chatter' ? (
+                          <div>
+                            <label className="mb-1 block text-xs font-medium text-[var(--text-muted)]">Payout % (chatters)</label>
+                            <input
+                              type="number"
+                              min={0}
+                              max={100}
+                              step={0.1}
+                              value={editMemberForm.payout_percentage_chatters}
+                              onChange={(e) =>
+                                setEditMemberForm((f) => ({
+                                  ...f,
+                                  payout_percentage_chatters: e.target.value,
+                                }))
+                              }
+                              className="glass-input w-full"
+                            />
+                          </div>
+                        ) : (
+                          <>
+                            <div>
+                              <label className="mb-1 block text-xs font-medium text-[var(--text-muted)]">
+                                Chatting % (agency total net)
+                              </label>
+                              <input
+                                type="number"
+                                min={0}
+                                max={100}
+                                step={0.1}
+                                value={editMemberForm.chatting_percentage}
+                                onChange={(e) =>
+                                  setEditMemberForm((f) => ({
+                                    ...f,
+                                    chatting_percentage: Number(e.target.value || 0),
+                                  }))
+                                }
+                                className="glass-input w-full"
+                              />
+                            </div>
+                            <div>
+                              <label className="mb-1 block text-xs font-medium text-[var(--text-muted)]">
+                                Chatting % (messages+tips net)
+                              </label>
+                              <input
+                                type="number"
+                                min={0}
+                                max={100}
+                                step={0.1}
+                                value={editMemberForm.chatting_percentage_messages_tips}
+                                onChange={(e) =>
+                                  setEditMemberForm((f) => ({
+                                    ...f,
+                                    chatting_percentage_messages_tips: Number(e.target.value || 0),
+                                  }))
+                                }
+                                className="glass-input w-full"
+                              />
+                            </div>
+                            <div>
+                              <label className="mb-1 block text-xs font-medium text-[var(--text-muted)]">
+                                Gunzo % (agency total net)
+                              </label>
+                              <input
+                                type="number"
+                                min={0}
+                                max={100}
+                                step={0.1}
+                                value={editMemberForm.gunzo_percentage}
+                                onChange={(e) =>
+                                  setEditMemberForm((f) => ({
+                                    ...f,
+                                    gunzo_percentage: Number(e.target.value || 0),
+                                  }))
+                                }
+                                className="glass-input w-full"
+                              />
+                            </div>
+                            <div>
+                              <label className="mb-1 block text-xs font-medium text-[var(--text-muted)]">
+                                Gunzo % (messages+tips net)
+                              </label>
+                              <input
+                                type="number"
+                                min={0}
+                                max={100}
+                                step={0.1}
+                                value={editMemberForm.gunzo_percentage_messages_tips}
+                                onChange={(e) =>
+                                  setEditMemberForm((f) => ({
+                                    ...f,
+                                    gunzo_percentage_messages_tips: Number(e.target.value || 0),
+                                  }))
+                                }
+                                className="glass-input w-full"
+                              />
+                            </div>
+                            <div>
+                              <label className="mb-1 block text-xs font-medium text-[var(--text-muted)]">
+                                Chatting % (no subscriptions)
+                              </label>
+                              <input
+                                type="number"
+                                min={0}
+                                max={100}
+                                step={0.1}
+                                value={editMemberForm.chatting_percentage_no_subs}
+                                onChange={(e) =>
+                                  setEditMemberForm((f) => ({
+                                    ...f,
+                                    chatting_percentage_no_subs: Number(e.target.value || 0),
+                                  }))
+                                }
+                                className="glass-input w-full"
+                              />
+                            </div>
+                            <div>
+                              <label className="mb-1 block text-xs font-medium text-[var(--text-muted)]">
+                                Gunzo % (no subscriptions)
+                              </label>
+                              <input
+                                type="number"
+                                min={0}
+                                max={100}
+                                step={0.1}
+                                value={editMemberForm.gunzo_percentage_no_subs}
+                                onChange={(e) =>
+                                  setEditMemberForm((f) => ({
+                                    ...f,
+                                    gunzo_percentage_no_subs: Number(e.target.value || 0),
+                                  }))
+                                }
+                                className="glass-input w-full"
+                              />
+                            </div>
+                          </>
+                        )}
+                      </>
                     )}
                     {(editMemberForm.payout_type === 'flat_fee' || editMemberForm.payout_type === 'hybrid') && (
                       <div>

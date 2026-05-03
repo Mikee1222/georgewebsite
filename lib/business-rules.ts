@@ -2,8 +2,8 @@ import type { SettingsMap } from './types';
 import type { PnlRow, PnlLinesRecordRaw } from './types';
 
 const DEFAULT_OF_FEE_PCT = 0.2;
-const DEFAULT_GREEN = 0.3;
-const DEFAULT_YELLOW_LOW = 0.15;
+const DEFAULT_GREEN = 0.5;
+const DEFAULT_YELLOW_LOW = 0.4;
 
 export function getOfFeePct(settings: Partial<SettingsMap> | null): number {
   return settings?.of_fee_pct ?? DEFAULT_OF_FEE_PCT;

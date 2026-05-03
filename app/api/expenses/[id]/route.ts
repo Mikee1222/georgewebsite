@@ -14,16 +14,16 @@ export const runtime = 'edge';
 
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: Promise<{ recordId: string }> }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   const reqId = requestId();
   const session = await getSessionFromRequest(request.headers.get('cookie'));
   if (!session) return unauthorized(reqId);
 
-  const { recordId } = await params;
-  if (!recordId) return badRequest(reqId, 'recordId required');
+  const { id } = await params;
+  if (!id) return badRequest(reqId, 'id required');
 
-  const existing = await getRecord<ExpenseEntryRecord>('expense_entries', recordId);
+  const existing = await getRecord<ExpenseEntryRecord>('expense_entries', id);
   if (!existing) {
     const res = NextResponse.json({ error: 'Record not found', requestId: reqId }, { status: 404 });
     res.headers.set('request-id', reqId);
@@ -93,14 +93,15 @@ export async function PATCH(
         await writeAuditLog({
           user_email: session.email,
           table: 'expense_entries',
-          record_id: recordId,
+          record_id: id,
           field_name: fieldName,
           old_value: oldStr,
           new_value: newStr,
         });
       }
     }
-    const updated = await updateExpense(recordId, updates);
+    const updated = await updateExpense(id, updates);
+    const createdAt = updated.fields.created_at ?? (updated as { createdTime?: string }).createdTime;
     const res = NextResponse.json({
       id: updated.id,
       month_id: updated.fields.month?.[0] ?? '',
@@ -117,26 +118,27 @@ export async function PATCH(
       date: updated.fields.date ?? '',
       created_by: updated.fields.created_by ?? '',
       receipt_url: updated.fields.receipt_url ?? '',
+      created_at: typeof createdAt === 'string' ? createdAt : undefined,
     });
     res.headers.set('request-id', reqId);
     return res;
   } catch (e) {
-    return serverError(reqId, e, { route: `/api/expenses/${recordId}` });
+    return serverError(reqId, e, { route: `/api/expenses/${id}` });
   }
 }
 
 export async function DELETE(
   _request: NextRequest,
-  { params }: { params: Promise<{ recordId: string }> }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   const reqId = requestId();
   const session = await getSessionFromRequest(_request.headers.get('cookie'));
   if (!session) return unauthorized(reqId);
 
-  const { recordId } = await params;
-  if (!recordId) return badRequest(reqId, 'recordId required');
+  const { id } = await params;
+  if (!id) return badRequest(reqId, 'id required');
 
-  const existing = await getRecord<ExpenseEntryRecord>('expense_entries', recordId);
+  const existing = await getRecord<ExpenseEntryRecord>('expense_entries', id);
   if (!existing) {
     const res = NextResponse.json({ error: 'Record not found', requestId: reqId }, { status: 404 });
     res.headers.set('request-id', reqId);
@@ -153,7 +155,7 @@ export async function DELETE(
     await writeAuditLog({
       user_email: session.email,
       table: 'expense_entries',
-      record_id: recordId,
+      record_id: id,
       field_name: 'delete',
       old_value: JSON.stringify({
         category: existing.fields.category,
@@ -163,11 +165,11 @@ export async function DELETE(
       }),
       new_value: '',
     });
-    await deleteExpense(recordId);
+    await deleteExpense(id);
     const res = NextResponse.json({ ok: true });
     res.headers.set('request-id', reqId);
     return res;
   } catch (e) {
-    return serverError(reqId, e, { route: `/api/expenses/${recordId}` });
+    return serverError(reqId, e, { route: `/api/expenses/${id}` });
   }
 }

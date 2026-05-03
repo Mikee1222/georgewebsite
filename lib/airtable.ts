@@ -136,6 +136,8 @@ const ALLOWED_KEYS_BY_TABLE: Record<string, Set<string>> = {
    'chatting_percentage_messages_tips',
    'gunzo_percentage',
    'gunzo_percentage_messages_tips',
+   'chatting_percentage_no_subs',
+   'gunzo_percentage_no_subs',
    'include_webapp_basis',
    'payout_scope',
   ]),
@@ -158,6 +160,7 @@ const ALLOWED_KEYS_BY_TABLE: Record<string, Set<string>> = {
     'month', 'team_member', 'basis_type', 'amount', 'amount_usd', 'amount_eur',
     'notes',
   ]),
+  // Linked columns model + week must match WEEKLY_STATS_READ_KEYS (listRecords fields[]).
   weekly_model_stats: new Set([
     'model', 'week', 'gross_revenue', 'net_revenue', 'amount_usd', 'amount_eur',
   ]),
@@ -172,9 +175,20 @@ const ALLOWED_KEYS_BY_TABLE: Record<string, Set<string>> = {
     'team_member', 'method_label', 'payout_method', 'beneficiary_name', 'iban_or_account',
     'revtag', 'status', 'notes', 'is_default',
   ]),
+  // Linked model + week must match WEEKLY_FORECAST_READ_KEYS. unique_key is formula — reads request it; upsert omits it.
   weekly_model_forecasts: new Set([
-    'model', 'week', 'scenario', 'projected_net_usd', 'projected_gross_usd',
-    'projected_net_eur', 'projected_gross_eur', 'fx_rate_usd_eur', 'source_type', 'is_locked', 'notes',
+    'model',
+    'week',
+    'scenario',
+    'projected_net_usd',
+    'projected_gross_usd',
+    'projected_net_eur',
+    'projected_gross_eur',
+    'fx_rate_usd_eur',
+    'source_type',
+    'is_locked',
+    'notes',
+    'unique_key',
   ]),
   model_forecasts: new Set([
     'model', 'month', 'scenario', 'projected_net_usd', 'projected_gross_usd',
@@ -231,7 +245,11 @@ async function airtableFetch<T>(
 const AIRTABLE_DISPLAY_LOCALE = 'en-US';
 const AIRTABLE_DISPLAY_TIMEZONE = 'Europe/Athens';
 
-/** GET list with optional filterByFormula and pagination. Optional cellFormat=string returns user-facing strings (requires userLocale + timeZone). */
+/**
+ * GET list with optional filterByFormula and pagination. Optional cellFormat=string returns user-facing strings (requires userLocale + timeZone).
+ * Linked-record columns are not filtered by `ALLOWED_KEYS_BY_TABLE` (that map is for writes via pickKnownFields only). When in doubt, pass `fields`
+ * so Airtable returns linked ids (e.g. model, week) explicitly.
+ */
 export async function listRecords<T>(
   tableKey: string,
   opts: {
@@ -470,8 +488,80 @@ function monthKeyToRange(monthKey: string): { start: string; end: string } | nul
   return { start, end };
 }
 
-/** Airtable field keys for weeks (read-only). week_key derived in app. */
+/** Airtable field keys for weeks (read-only). week_key derived in app. Record id is always `r.id`, never inside `fields`. */
 const WEEKS_READ_KEYS = ['week_start', 'week_end'] as const;
+
+/** weekly_model_stats: explicit `fields[]` for listRecords — linked `model` and `week` must be included (see ALLOWED_KEYS_BY_TABLE.weekly_model_stats). */
+const WEEKLY_STATS_READ_KEYS = [
+  'model',
+  'week',
+  'gross_revenue',
+  'net_revenue',
+  'amount_usd',
+  'amount_eur',
+  'computed_gross_usd',
+  'computed_net_usd',
+] as const;
+const WEEKLY_STATS_WRITE_KEYS = ['model', 'week', 'gross_revenue', 'net_revenue', 'amount_usd', 'amount_eur'] as const;
+
+/** weekly_model_forecasts: explicit `fields[]` — linked `model` and `week` must be included (see ALLOWED_KEYS_BY_TABLE.weekly_model_forecasts). */
+const WEEKLY_FORECAST_READ_KEYS = [
+  'model',
+  'week',
+  'scenario',
+  'projected_net_usd',
+  'projected_gross_usd',
+  'projected_net_eur',
+  'projected_gross_eur',
+  'fx_rate_usd_eur',
+  'source_type',
+  'is_locked',
+  'notes',
+  'unique_key',
+] as const;
+
+/** Dev-only: log raw field keys returned per record (diagnose missing linked fields / wrong names). */
+function devLogAirtableRecordFieldKeys(
+  label: string,
+  records: { id: string; fields: Record<string, unknown> }[],
+  max = 8
+): void {
+  if (process.env.NODE_ENV !== 'development') return;
+  const n = Math.min(max, records.length);
+  for (let i = 0; i < n; i++) {
+    const r = records[i];
+    const keys =
+      r?.fields && typeof r.fields === 'object' ? Object.keys(r.fields).sort().join(', ') : '(no fields)';
+    console.log(`[airtable ${label}] record[${i}] id=${r.id} raw field keys: [${keys}]`);
+  }
+  if (records.length > n) {
+    console.log(`[airtable ${label}] ... ${records.length - n} more records not shown`);
+  }
+}
+
+/** Coerce Airtable linked record cell to string[] (ids). */
+function normalizeLinkedIds(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((x): x is string => typeof x === 'string' && x.trim().length > 0);
+  if (typeof value === 'string' && value.trim()) return [value.trim()];
+  return [];
+}
+
+/** Normalize linked-record fields: model and week are string[] (never Number/parseInt). */
+function normalizeWeeklyModelStatsFields(fields: Record<string, unknown>): WeeklyModelStatsRecord {
+  return {
+    ...fields,
+    model: normalizeLinkedIds(fields.model),
+    week: normalizeLinkedIds(fields.week),
+  } as WeeklyModelStatsRecord;
+}
+
+function normalizeWeeklyForecastFields(fields: Record<string, unknown>): WeeklyModelForecastRecord {
+  return {
+    ...fields,
+    model: normalizeLinkedIds(fields.model),
+    week: normalizeLinkedIds(fields.week),
+  } as WeeklyModelForecastRecord;
+}
 
 /**
  * Weeks overlapping a month. Fetches all weeks, filters in app.
@@ -479,13 +569,30 @@ const WEEKS_READ_KEYS = ['week_start', 'week_end'] as const;
  */
 export async function getWeeksOverlappingMonth(monthKey: string): Promise<Array<{ id: string; week_start: string; week_end: string; week_key: string }>> {
   if (process.env.NODE_ENV === 'development') {
-    console.log('[airtable] weeks READ keys:', WEEKS_READ_KEYS.join(', '));
+    console.log(
+      '[airtable getWeeksOverlappingMonth] listRecords fields[]:',
+      WEEKS_READ_KEYS.join(', '),
+      '— Airtable record id is always top-level `id`, not requested via fields[]'
+    );
   }
   const range = monthKeyToRange(monthKey);
   if (!range) return [];
   const records = await listRecords<WeeksRecord>('weeks', {
     sort: [{ field: 'week_start', direction: 'asc' }],
+    fields: [...WEEKS_READ_KEYS],
   });
+  if (process.env.NODE_ENV === 'development' && records.length > 0) {
+    for (const r of records.slice(0, 2)) {
+      console.log(
+        '[airtable getWeeksOverlappingMonth] sample week record id=',
+        r.id,
+        'fields keys=',
+        Object.keys(r.fields ?? {}).sort().join(', '),
+        'week_start=',
+        r.fields.week_start
+      );
+    }
+  }
   const out: Array<{ id: string; week_start: string; week_end: string; week_key: string }> = [];
   for (const r of records) {
     const start = r.fields.week_start?.trim();
@@ -621,26 +728,13 @@ export async function getWeeklyStatsForWeeks(
   const formula = `OR(${orClauses})`;
   if (process.env.NODE_ENV === 'development') {
     console.log('[airtable getWeeklyStatsForWeeks] filterByFormula:', formula);
+    console.log('[airtable getWeeklyStatsForWeeks] fields[]:', [...WEEKLY_STATS_READ_KEYS].join(', '));
   }
   return listRecords<WeeklyModelStatsRecord>('weekly_model_stats', {
     filterByFormula: formula,
     sort: [{ field: 'week', direction: 'asc' }],
+    fields: [...WEEKLY_STATS_READ_KEYS],
   });
-}
-
-/** Airtable field keys for weekly_model_stats: read and write. */
-const WEEKLY_STATS_READ_KEYS = ['model', 'week', 'gross_revenue', 'net_revenue', 'amount_usd', 'amount_eur'] as const;
-const WEEKLY_STATS_WRITE_KEYS = ['model', 'week', 'gross_revenue', 'net_revenue', 'amount_usd', 'amount_eur'] as const;
-
-/** Normalize linked-record fields: model and week are string[] (never Number/parseInt). */
-function normalizeWeeklyModelStatsFields(fields: Record<string, unknown>): WeeklyModelStatsRecord {
-  const model = Array.isArray(fields.model) ? (fields.model as string[]) : [];
-  const week = Array.isArray(fields.week) ? (fields.week as string[]) : [];
-  return {
-    ...fields,
-    model,
-    week,
-  } as WeeklyModelStatsRecord;
 }
 
 /**
@@ -667,9 +761,15 @@ export async function getWeeklyStatsByModelAndWeeks(
   }
   if (process.env.NODE_ENV === 'development') {
     console.log('[airtable getWeeklyStatsByModelAndWeeks] raw records from Airtable (before filter):', rawRecords.length);
-    rawRecords.slice(0, 3).forEach((r, i) => {
-      console.log(`  [${i}] id=${r.id} model=${JSON.stringify(r.fields?.model)} week=${JSON.stringify(r.fields?.week)}`);
-    });
+    devLogAirtableRecordFieldKeys('getWeeklyStatsByModelAndWeeks', rawRecords as { id: string; fields: Record<string, unknown> }[]);
+    const f0 = rawRecords[0]?.fields as Record<string, unknown> | undefined;
+    if (f0) {
+      console.log(
+        '[airtable getWeeklyStatsByModelAndWeeks] sample linked values fields.model / fields.week:',
+        f0.model,
+        f0.week
+      );
+    }
   }
   const normalized = rawRecords.map((r) => ({
     ...r,
@@ -703,6 +803,7 @@ export async function getWeeklyStatByModelAndWeek(
   const records = await listRecords<WeeklyModelStatsRecord>('weekly_model_stats', {
     filterByFormula: formula,
     maxRecords: 1,
+    fields: [...WEEKLY_STATS_READ_KEYS],
   });
   return records[0] ?? null;
 }
@@ -750,22 +851,46 @@ export async function getWeeklyForecastsByModelAndWeeks(
   const modelIdTrim = modelId.trim();
   let rawRecords: AirtableRecord<WeeklyModelForecastRecord>[];
   const formulaByModel = linkedHasId('model', modelIdTrim);
+  if (process.env.NODE_ENV === 'development') {
+    console.log('[airtable getWeeklyForecastsByModelAndWeeks] fields[]:', [...WEEKLY_FORECAST_READ_KEYS].join(', '));
+  }
   rawRecords = await listRecords<WeeklyModelForecastRecord>('weekly_model_forecasts', {
     filterByFormula: formulaByModel,
     sort: [{ field: 'week', direction: 'asc' }],
+    fields: [...WEEKLY_FORECAST_READ_KEYS],
   });
   if (rawRecords.length === 0 && weekIdSet.size > 0) {
     rawRecords = await listRecords<WeeklyModelForecastRecord>('weekly_model_forecasts', {
       sort: [{ field: 'week', direction: 'asc' }],
       maxRecords: 1000,
+      fields: [...WEEKLY_FORECAST_READ_KEYS],
     });
     if (process.env.NODE_ENV === 'development' && rawRecords.length > 0) {
       console.log('[airtable getWeeklyForecastsByModelAndWeeks] formula returned 0, fallback fetched', rawRecords.length);
     }
   }
-  return rawRecords.filter((r) => {
-    const weekId = Array.isArray(r.fields.week) ? r.fields.week[0] : undefined;
-    const recordModelId = Array.isArray(r.fields.model) ? r.fields.model[0] : undefined;
+  if (process.env.NODE_ENV === 'development') {
+    console.log('[airtable getWeeklyForecastsByModelAndWeeks] raw records (before week filter):', rawRecords.length);
+    devLogAirtableRecordFieldKeys(
+      'getWeeklyForecastsByModelAndWeeks',
+      rawRecords as { id: string; fields: Record<string, unknown> }[]
+    );
+    const f0 = rawRecords[0]?.fields as Record<string, unknown> | undefined;
+    if (f0) {
+      console.log(
+        '[airtable getWeeklyForecastsByModelAndWeeks] sample linked values fields.model / fields.week:',
+        f0.model,
+        f0.week
+      );
+    }
+  }
+  const normalizedForecasts = rawRecords.map((r) => ({
+    ...r,
+    fields: normalizeWeeklyForecastFields(r.fields as Record<string, unknown>),
+  })) as AirtableRecord<WeeklyModelForecastRecord>[];
+  return normalizedForecasts.filter((r) => {
+    const weekId = r.fields.week?.[0];
+    const recordModelId = r.fields.model?.[0];
     return recordModelId === modelIdTrim && weekId && weekIdSet.has(weekId);
   });
 }
@@ -780,8 +905,14 @@ export async function getWeeklyForecastByUniqueKey(
   const records = await listRecords<WeeklyModelForecastRecord>('weekly_model_forecasts', {
     filterByFormula: `ARRAYJOIN({unique_key},"")="${escapeFormulaValue(uniqueKey.trim())}"`,
     maxRecords: 1,
+    fields: [...WEEKLY_FORECAST_READ_KEYS],
   });
-  return records[0] ?? null;
+  const rec = records[0];
+  if (!rec) return null;
+  return {
+    ...rec,
+    fields: normalizeWeeklyForecastFields(rec.fields as Record<string, unknown>),
+  } as AirtableRecord<WeeklyModelForecastRecord>;
 }
 
 /**
@@ -1507,6 +1638,8 @@ export async function createTeamMember(fields: {
   chatting_percentage_messages_tips?: number;
   gunzo_percentage?: number;
   gunzo_percentage_messages_tips?: number;
+  chatting_percentage_no_subs?: number;
+  gunzo_percentage_no_subs?: number;
   payout_flat_fee?: number;
   models_scope?: string[];
   payout_scope?: 'agency_total_net' | 'messages_tips_net';
@@ -1549,6 +1682,14 @@ export async function createTeamMember(fields: {
   if (gunzoMsgsPct != null && String(gunzoMsgsPct).trim() !== '') {
     payload.gunzo_percentage_messages_tips = Number(gunzoMsgsPct);
   }
+  const chattingNoSubsPct = fields.chatting_percentage_no_subs;
+  if (chattingNoSubsPct != null && String(chattingNoSubsPct).trim() !== '') {
+    payload.chatting_percentage_no_subs = Number(chattingNoSubsPct);
+  }
+  const gunzoNoSubsPct = fields.gunzo_percentage_no_subs;
+  if (gunzoNoSubsPct != null && String(gunzoNoSubsPct).trim() !== '') {
+    payload.gunzo_percentage_no_subs = Number(gunzoNoSubsPct);
+  }
   const flat = fields.payout_flat_fee;
   if (flat != null && String(flat).trim() !== '') payload.payout_flat_fee = Number(flat);
   if (Array.isArray(fields.models_scope) && fields.models_scope.length > 0) payload.models_scope = fields.models_scope.filter((id): id is string => typeof id === 'string' && id.trim().length > 0);
@@ -1576,11 +1717,16 @@ export async function updateTeamMember(
     affiliator_percentage: number;
     payout_type: string;
     payout_percentage: number;
+    payout_percentage_chatters: number;
     payout_flat_fee: number;
     payout_frequency: string;
     models_scope: string[];
     chatting_percentage: number;
+    chatting_percentage_messages_tips: number;
     gunzo_percentage: number;
+    gunzo_percentage_messages_tips: number;
+    chatting_percentage_no_subs: number;
+    gunzo_percentage_no_subs: number;
     include_webapp_basis: boolean;
     payout_scope: 'agency_total_net' | 'messages_tips_net';
   }>
@@ -1599,10 +1745,21 @@ export async function updateTeamMember(
   if (fields.payout_type !== undefined) payload.payout_type = String(fields.payout_type);
   if (fields.payout_frequency !== undefined) payload.payout_frequency = String(fields.payout_frequency);
   if (fields.payout_percentage !== undefined) payload.payout_percentage = Number(fields.payout_percentage);
+  if (fields.payout_percentage_chatters !== undefined) {
+    payload.payout_percentage_chatters = Number(fields.payout_percentage_chatters);
+  }
   if (fields.payout_flat_fee !== undefined) payload.payout_flat_fee = Number(fields.payout_flat_fee);
   if ('models_scope' in fields) payload.models_scope = Array.isArray(fields.models_scope) ? fields.models_scope.filter((id): id is string => typeof id === 'string' && id.trim().length > 0) : [];
   if (fields.chatting_percentage !== undefined) payload.chatting_percentage = Number(fields.chatting_percentage);
+  if (fields.chatting_percentage_messages_tips !== undefined) {
+    payload.chatting_percentage_messages_tips = Number(fields.chatting_percentage_messages_tips);
+  }
   if (fields.gunzo_percentage !== undefined) payload.gunzo_percentage = Number(fields.gunzo_percentage);
+  if (fields.gunzo_percentage_messages_tips !== undefined) {
+    payload.gunzo_percentage_messages_tips = Number(fields.gunzo_percentage_messages_tips);
+  }
+  if (fields.chatting_percentage_no_subs !== undefined) payload.chatting_percentage_no_subs = Number(fields.chatting_percentage_no_subs);
+  if (fields.gunzo_percentage_no_subs !== undefined) payload.gunzo_percentage_no_subs = Number(fields.gunzo_percentage_no_subs);
   if (fields.include_webapp_basis !== undefined) payload.include_webapp_basis = Boolean(fields.include_webapp_basis);
   if (fields.payout_scope !== undefined) payload.payout_scope = fields.payout_scope;
   delete (payload as Record<string, unknown>).model_id;
@@ -1619,18 +1776,24 @@ export async function deleteTeamMember(recordId: string): Promise<void> {
 
 /**
  * List model_assignments for a team member. Returns record ids and model ids.
- * Uses filterByFormula with linked record id; Airtable may return primary values for {team_member}, so we fetch and filter by id in code if needed.
+ * Fetches assignments in one paginated request and filters in code — avoids filterByFormula on
+ * {team_member} when the base uses a different linked-field name (INVALID_FILTER_BY_FORMULA).
  */
 export async function listModelAssignmentsByTeamMember(
   teamMemberId: string
 ): Promise<AirtableRecord<ModelAssignmentRecord>[]> {
   if (!teamMemberId?.trim()) return [];
-  const formula = linkedHasId('team_member', teamMemberId.trim());
+  const tid = teamMemberId.trim();
   const records = await listRecords<ModelAssignmentRecord>('model_assignments', {
-    filterByFormula: formula,
-    maxRecords: 500,
+    maxRecords: 5000,
   });
-  return records;
+  return records.filter((rec) => {
+    const tm =
+      Array.isArray(rec.fields.team_member) && rec.fields.team_member[0]
+        ? String(rec.fields.team_member[0])
+        : '';
+    return tm === tid;
+  });
 }
 
 /**
@@ -2667,15 +2830,35 @@ export async function getPayoutRunsInRange(
   });
 }
 
+/**
+ * Union of listPayoutRuns(monthId) for each month record in [from_month_key, to_month_key], deduped by run id.
+ * Same rows as {@link getPayoutRunsInRange} for typical data; uses listPayoutRuns per month as requested for saved-run flows.
+ */
+export async function listPayoutRunsInMonthKeyRange(
+  from_month_key: string,
+  to_month_key: string
+): Promise<AirtableRecord<PayoutRunRecord>[]> {
+  const monthIds = await getMonthRecordIdsInRange(from_month_key.trim(), to_month_key.trim());
+  if (monthIds.length === 0) return [];
+  const byId = new Map<string, AirtableRecord<PayoutRunRecord>>();
+  for (const monthId of monthIds) {
+    const runs = await listPayoutRuns(monthId);
+    for (const run of runs) {
+      byId.set(run.id, run);
+    }
+  }
+  return [...byId.values()];
+}
+
 export type PayoutLinesRangeOpts = {
   /** live = all runs in range; locked = only runs with status in ['locked','paid'] */
   source: 'live' | 'locked';
-  /** owed = all lines in scope; paid = only lines from runs with status 'paid' (or line paid_status 'paid') */
-  mode: 'owed' | 'paid';
+  /** all = locked+paid runs in range (no paid-only run filter); paid = only lines from runs with status 'paid' */
+  mode: 'paid' | 'all';
 };
 
 /**
- * List payout_lines for a month range. Filters by runs in range, then by source (live vs locked) and mode (owed vs paid).
+ * List payout_lines for a month range. Filters by runs in range, then by source (live vs locked) and mode (all vs paid-only runs).
  */
 export async function listPayoutLinesInRange(
   from_month_key: string,

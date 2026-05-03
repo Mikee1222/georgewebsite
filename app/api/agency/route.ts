@@ -4,6 +4,7 @@ import {
   getModels,
   getMonths,
   getSettings,
+  listPayoutRunsInMonthKeyRange,
   listExpenseEntriesInRange,
   listPayoutLinesInRange,
   listTeamMembers,
@@ -33,17 +34,53 @@ export async function GET(request: NextRequest) {
 
   const from = request.nextUrl.searchParams.get('from') ?? '';
   const to = request.nextUrl.searchParams.get('to') ?? from;
-  const payoutsMode = (request.nextUrl.searchParams.get('payouts_mode') ?? 'owed') as 'owed' | 'paid';
-  const payoutsSource = (request.nextUrl.searchParams.get('payouts_source') ?? 'live') as 'live' | 'locked';
+  const payoutsModeRaw = request.nextUrl.searchParams.get('payouts_mode') ?? 'all';
+  const payoutsMode = (payoutsModeRaw === 'paid' ? 'paid' : 'all') as 'paid' | 'all';
+  const payoutsSource = (request.nextUrl.searchParams.get('payouts_source') ?? 'live') as 'live' | 'locked' | 'saved_run';
   const debugQuery = request.nextUrl.searchParams.get('debug') === '1';
 
   if (!from || !to) return badRequest(reqId, 'from and to (YYYY-MM) required');
 
   try {
-    const payoutLinesPromise =
-      payoutsSource === 'locked'
-        ? listPayoutLinesInRange(from, to, { source: payoutsSource, mode: payoutsMode })
-        : Promise.resolve([] as Awaited<ReturnType<typeof listPayoutLinesInRange>>);
+    /** When true, compute payouts via live preview; when false, aggregate locked payout_lines (includes saved_run after run check). */
+    let useLivePayouts = payoutsSource === 'live';
+    let payoutLinesPromise: Promise<Awaited<ReturnType<typeof listPayoutLinesInRange>>> = Promise.resolve([]);
+
+    if (payoutsSource === 'locked' || payoutsSource === 'saved_run') {
+      if (payoutsSource === 'saved_run') {
+        const runsInRange = await listPayoutRunsInMonthKeyRange(from, to);
+        const sorted = runsInRange.slice().sort((a, b) => {
+          const tb = b.createdTime ?? '';
+          const ta = a.createdTime ?? '';
+          if (tb !== ta) return tb.localeCompare(ta);
+          return b.id.localeCompare(a.id);
+        });
+        const latestRun = sorted[0];
+        if (runsInRange.length === 0) {
+          if (typeof console !== 'undefined' && console.warn) {
+            console.warn('[api/agency] payouts_source=saved_run: no payout runs in month range; falling back to live computation', {
+              requestId: reqId,
+              from,
+              to,
+            });
+          }
+          useLivePayouts = true;
+          payoutLinesPromise = Promise.resolve([]);
+        } else {
+          if (process.env.NODE_ENV === 'development' && typeof console !== 'undefined') {
+            console.log('[api/agency] payouts_source=saved_run: using locked payout lines', {
+              requestId: reqId,
+              runs_in_range: runsInRange.length,
+              latest_run_id: latestRun?.id,
+              latest_created_time: latestRun?.createdTime,
+            });
+          }
+          payoutLinesPromise = listPayoutLinesInRange(from, to, { source: 'locked', mode: payoutsMode });
+        }
+      } else {
+        payoutLinesPromise = listPayoutLinesInRange(from, to, { source: 'locked', mode: payoutsMode });
+      }
+    }
 
     const [settingsRows, modelsRecords, monthsRecords, pnlRecords, expenseEntries, payoutLines, fxRate, teamMembersRecords] =
       await Promise.all([
@@ -270,7 +307,7 @@ export async function GET(request: NextRequest) {
 
     let payoutPath: 'live' | 'locked';
     let livePayoutsResult: LivePayoutsResult | null = null;
-    if (payoutsSource === 'live') {
+    if (useLivePayouts) {
       payoutPath = 'live';
       const livePayouts = await computeLivePayoutsInRange(from, to, fxRate > 0 ? fxRate : null);
       livePayoutsResult = livePayouts;
@@ -431,12 +468,15 @@ export async function GET(request: NextRequest) {
       }
       if (process.env.NODE_ENV === 'development' && typeof console !== 'undefined') {
         const lockedTotalUsd = Object.values(byModel).reduce((s, a) => s + a.payout_usd, 0);
-        console.log('[api/agency] payouts_source=locked', {
-          requestId: reqId,
-          payout_path: 'locked',
-          payout_lines_count: payoutLines.length,
-          total_payout_usd: lockedTotalUsd,
-        });
+        console.log(
+          payoutsSource === 'saved_run' ? '[api/agency] payouts_source=saved_run (locked lines)' : '[api/agency] payouts_source=locked',
+          {
+            requestId: reqId,
+            payout_path: 'locked',
+            payout_lines_count: payoutLines.length,
+            total_payout_usd: lockedTotalUsd,
+          }
+        );
       }
     }
 
@@ -520,10 +560,10 @@ export async function GET(request: NextRequest) {
         },
         payout_lines: {
           filter:
-            payoutsSource === 'live'
+            useLivePayouts
               ? 'none (computed live from preview logic)'
-              : `payout_run in runs for month range; source=${payoutsSource}; mode=${payoutsMode}`,
-          count: payoutsSource === 'live' ? 0 : payoutLines.length,
+              : `payout_run in runs for month range; source=${payoutsSource === 'saved_run' ? 'saved_run→locked' : payoutsSource}; mode=${payoutsMode}`,
+          count: useLivePayouts ? 0 : payoutLines.length,
         },
       },
       totals: {

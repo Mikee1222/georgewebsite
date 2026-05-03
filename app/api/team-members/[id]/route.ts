@@ -44,12 +44,17 @@ function toMember(rec: AirtableRecord<TeamMemberRecord>): TeamMember {
     linked_models: linkedModels,
     payout_type: payoutType,
     payout_percentage: f.payout_percentage,
+    payout_percentage_chatters: f.payout_percentage_chatters,
     payout_flat_fee: f.payout_flat_fee,
     payout_frequency: payoutType !== 'none' ? payoutFreq : 'monthly',
     models_scope: modelsScope,
     affiliator_percentage: f.affiliator_percentage,
     chatting_percentage: f.chatting_percentage,
+    chatting_percentage_messages_tips: f.chatting_percentage_messages_tips,
     gunzo_percentage: f.gunzo_percentage,
+    gunzo_percentage_messages_tips: f.gunzo_percentage_messages_tips,
+    chatting_percentage_no_subs: f.chatting_percentage_no_subs,
+    gunzo_percentage_no_subs: f.gunzo_percentage_no_subs,
     include_webapp_basis: f.include_webapp_basis,
     payout_scope: f.payout_scope,
   };
@@ -72,7 +77,7 @@ function validatePayout(
   if (payoutType === 'percentage') {
     const pct = typeof body.payout_percentage === 'number' ? body.payout_percentage : undefined;
     if (pct === undefined || pct === null) return { error: 'payout_percentage required when payout_type is percentage', payout_type: payoutType, payout_frequency: 'monthly', models_scope: [] };
-    if (pct <= 0 || pct > 100) return { error: 'payout_percentage must be between 0 and 100', payout_type: payoutType, payout_frequency: 'monthly', models_scope: [] };
+    if (pct < 0 || pct > 100) return { error: 'payout_percentage must be between 0 and 100', payout_type: payoutType, payout_frequency: 'monthly', models_scope: [] };
     const freq = body.payout_frequency && PAYOUT_FREQUENCIES.includes(body.payout_frequency as PayoutFrequency) ? (body.payout_frequency as PayoutFrequency) : 'monthly';
     const scope = Array.isArray(body.models_scope) ? body.models_scope.filter((id): id is string => typeof id === 'string' && id.trim().length > 0) : [];
     return { payout_type: payoutType, payout_percentage: pct, payout_frequency: freq, models_scope: isChattingManager ? scope : [] };
@@ -89,7 +94,7 @@ function validatePayout(
     const pct = typeof body.payout_percentage === 'number' ? body.payout_percentage : undefined;
     const flat = typeof body.payout_flat_fee === 'number' ? body.payout_flat_fee : undefined;
     if ((pct === undefined || pct === null) && (flat === undefined || flat === null)) return { error: 'hybrid requires at least one of payout_percentage or payout_flat_fee', payout_type: payoutType, payout_frequency: 'monthly', models_scope: [] };
-    if (pct != null && (pct <= 0 || pct > 100)) return { error: 'payout_percentage must be between 0 and 100', payout_type: payoutType, payout_frequency: 'monthly', models_scope: [] };
+    if (pct != null && (pct < 0 || pct > 100)) return { error: 'payout_percentage must be between 0 and 100', payout_type: payoutType, payout_frequency: 'monthly', models_scope: [] };
     if (flat != null && flat < 0) return { error: 'payout_flat_fee must be >= 0', payout_type: payoutType, payout_frequency: 'monthly', models_scope: [] };
     const freq = body.payout_frequency && PAYOUT_FREQUENCIES.includes(body.payout_frequency as PayoutFrequency) ? (body.payout_frequency as PayoutFrequency) : 'monthly';
     const scopeHybrid = Array.isArray(body.models_scope) ? body.models_scope.filter((id): id is string => typeof id === 'string' && id.trim().length > 0) : [];
@@ -170,10 +175,17 @@ export async function PATCH(
     affiliator_percentage: number;
     payout_type: PayoutType;
     payout_percentage: number;
+    payout_percentage_chatters: number;
     payout_flat_fee: number;
     payout_frequency: PayoutFrequency;
     models_scope: string[];
     payout_scope: 'agency_total_net' | 'messages_tips_net';
+    chatting_percentage: number;
+    chatting_percentage_messages_tips: number;
+    gunzo_percentage: number;
+    gunzo_percentage_messages_tips: number;
+    chatting_percentage_no_subs: number;
+    gunzo_percentage_no_subs: number;
   }> = {};
 
   if (typeof body.name === 'string') updates.name = body.name;
@@ -228,6 +240,104 @@ export async function PATCH(
     }
   }
 
+  const hasBucketPctUpdate =
+    body.chatting_percentage !== undefined ||
+    body.chatting_percentage_messages_tips !== undefined ||
+    body.gunzo_percentage !== undefined ||
+    body.gunzo_percentage_messages_tips !== undefined ||
+    body.chatting_percentage_no_subs !== undefined ||
+    body.gunzo_percentage_no_subs !== undefined;
+
+  if (hasBucketPctUpdate) {
+    const roleLower = ((typeof body.role === 'string' ? body.role : existingFields.role) ?? '').toLowerCase();
+    if (roleLower === 'chatter') {
+      return badRequest(reqId, 'Bucket percentage fields are not allowed for chatter');
+    }
+    const pctKeys = [
+      ['chatting_percentage', body.chatting_percentage],
+      ['chatting_percentage_messages_tips', body.chatting_percentage_messages_tips],
+      ['gunzo_percentage', body.gunzo_percentage],
+      ['gunzo_percentage_messages_tips', body.gunzo_percentage_messages_tips],
+      ['chatting_percentage_no_subs', body.chatting_percentage_no_subs],
+      ['gunzo_percentage_no_subs', body.gunzo_percentage_no_subs],
+    ] as const;
+    for (const [key, v] of pctKeys) {
+      if (v === undefined) continue;
+      if (typeof v !== 'number' || Number.isNaN(v) || v < 0 || v > 100) {
+        return badRequest(reqId, `${key} must be between 0 and 100`);
+      }
+    }
+    const mergedChatting =
+      typeof body.chatting_percentage === 'number' ? body.chatting_percentage : (existingFields.chatting_percentage ?? 0);
+    const mergedChattingMsgs =
+      typeof body.chatting_percentage_messages_tips === 'number'
+        ? body.chatting_percentage_messages_tips
+        : (existingFields.chatting_percentage_messages_tips ?? 0);
+    const mergedGunzo =
+      typeof body.gunzo_percentage === 'number' ? body.gunzo_percentage : (existingFields.gunzo_percentage ?? 0);
+    const mergedGunzoMsgs =
+      typeof body.gunzo_percentage_messages_tips === 'number'
+        ? body.gunzo_percentage_messages_tips
+        : (existingFields.gunzo_percentage_messages_tips ?? 0);
+    const mergedChattingNoSubs =
+      typeof body.chatting_percentage_no_subs === 'number'
+        ? body.chatting_percentage_no_subs
+        : (existingFields.chatting_percentage_no_subs ?? 0);
+    const mergedGunzoNoSubs =
+      typeof body.gunzo_percentage_no_subs === 'number'
+        ? body.gunzo_percentage_no_subs
+        : (existingFields.gunzo_percentage_no_subs ?? 0);
+    if (mergedChatting > 0 && mergedChattingMsgs > 0) {
+      return badRequest(
+        reqId,
+        'Cannot have both chatting_percentage and chatting_percentage_messages_tips > 0'
+      );
+    }
+    if (mergedGunzo > 0 && mergedGunzoMsgs > 0) {
+      return badRequest(reqId, 'Cannot have both gunzo_percentage and gunzo_percentage_messages_tips > 0');
+    }
+    if (mergedChatting > 0 && mergedChattingNoSubs > 0) {
+      return badRequest(
+        reqId,
+        'Cannot have both chatting_percentage and chatting_percentage_no_subs > 0'
+      );
+    }
+    if (mergedGunzo > 0 && mergedGunzoNoSubs > 0) {
+      return badRequest(reqId, 'Cannot have both gunzo_percentage and gunzo_percentage_no_subs > 0');
+    }
+    if (typeof body.chatting_percentage === 'number') updates.chatting_percentage = body.chatting_percentage;
+    if (typeof body.chatting_percentage_messages_tips === 'number') {
+      updates.chatting_percentage_messages_tips = body.chatting_percentage_messages_tips;
+    }
+    if (typeof body.gunzo_percentage === 'number') updates.gunzo_percentage = body.gunzo_percentage;
+    if (typeof body.gunzo_percentage_messages_tips === 'number') {
+      updates.gunzo_percentage_messages_tips = body.gunzo_percentage_messages_tips;
+    }
+    if (typeof body.chatting_percentage_no_subs === 'number') {
+      updates.chatting_percentage_no_subs = body.chatting_percentage_no_subs;
+    }
+    if (typeof body.gunzo_percentage_no_subs === 'number') {
+      updates.gunzo_percentage_no_subs = body.gunzo_percentage_no_subs;
+    }
+  }
+
+  if (body.payout_percentage_chatters !== undefined) {
+    const roleLower = ((typeof body.role === 'string' ? body.role : existingFields.role) ?? '').toLowerCase();
+    if (roleLower !== 'chatter') {
+      return badRequest(reqId, 'payout_percentage_chatters is only allowed for chatter role');
+    }
+    const v = body.payout_percentage_chatters;
+    if (typeof v !== 'number' || Number.isNaN(v) || v < 0 || v > 100) {
+      return badRequest(reqId, 'payout_percentage_chatters must be between 0 and 100');
+    }
+    updates.payout_percentage_chatters = v;
+  }
+
+  const effectiveRoleLower = ((typeof body.role === 'string' ? body.role : existingFields.role) ?? '').toLowerCase().trim();
+  if (effectiveRoleLower !== 'chatter') {
+    delete updates.payout_percentage;
+  }
+
   if (Object.keys(updates).length === 0 && assigned_model_ids === undefined) return badRequest(reqId, 'No allowed fields to update');
 
   if (process.env.NODE_ENV === 'development') {
@@ -266,15 +376,11 @@ export async function PATCH(
       console.log('[team-members PATCH] requestId:', reqId, 'Airtable response fields:', JSON.stringify(u.fields));
     }
     const out = toMember(updated as AirtableRecord<TeamMemberRecord>);
+    const resBody: TeamMember & { assigned_model_ids?: string[] } = { ...out };
     if (assigned_model_ids !== undefined) {
-      (out as TeamMember & { assigned_model_ids: string[] }).assigned_model_ids = assigned_model_ids;
-    } else {
-      const assignments = await listModelAssignmentsByTeamMember(id);
-      (out as TeamMember & { assigned_model_ids: string[] }).assigned_model_ids = assignments
-        .map((r) => (Array.isArray(r.fields.model) && r.fields.model[0] ? r.fields.model[0] : ''))
-        .filter(Boolean);
+      resBody.assigned_model_ids = assigned_model_ids;
     }
-    const res = NextResponse.json(out);
+    const res = NextResponse.json(resBody);
     res.headers.set('request-id', reqId);
     return res;
   } catch (e) {

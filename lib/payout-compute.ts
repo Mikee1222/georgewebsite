@@ -42,6 +42,8 @@ export type MemberPctFields = {
   gunzo_percentage?: number;
   chatting_percentage_messages_tips?: number;
   gunzo_percentage_messages_tips?: number;
+  chatting_percentage_no_subs?: number;
+  gunzo_percentage_no_subs?: number;
 };
 
 /**
@@ -213,10 +215,7 @@ export async function computePreviewPayouts(
     if (!teamMemberIdsSet.has(tmId)) continue;
     if (!basisByMemberEur[tmId]) basisByMemberEur[tmId] = { bonus: 0, adjustment: 0 };
     const type = (r.fields.basis_type ?? '') as BasisType;
-    const amountEur = typeof r.fields.amount_eur === 'number' ? r.fields.amount_eur : null;
-    const amountUsd = typeof r.fields.amount_usd === 'number' ? r.fields.amount_usd : null;
-    const amount = typeof r.fields.amount === 'number' ? r.fields.amount : 0;
-    const valueEur = amountEur ?? amountUsd ?? amount;
+    const valueEur = typeof r.fields.amount_eur === 'number' ? r.fields.amount_eur : (typeof r.fields.amount === 'number' ? r.fields.amount : 0);
     if (type === 'bonus') basisByMemberEur[tmId].bonus += valueEur;
     else if (type === 'adjustment' || type === 'fine') basisByMemberEur[tmId].adjustment += valueEur;
   }
@@ -326,6 +325,8 @@ export async function computePreviewPayouts(
     const chattingPctMsgs = Number((rec.fields as Record<string, unknown>).chatting_percentage_messages_tips) || 0;
     const gunzoPct = Number(rec.fields.gunzo_percentage) || 0;
     const gunzoPctMsgs = Number((rec.fields as Record<string, unknown>).gunzo_percentage_messages_tips) || 0;
+    const chattingPctNoSubs = Number((rec.fields as Record<string, unknown>).chatting_percentage_no_subs) || 0;
+    const gunzoPctNoSubs = Number((rec.fields as Record<string, unknown>).gunzo_percentage_no_subs) || 0;
     const flatFee = Number(rec.fields.payout_flat_fee) || 0;
 
     const isChatter = isChatterPayout(role, department);
@@ -372,6 +373,12 @@ export async function computePreviewPayouts(
       if (chattingPct > 0 && chattingPctMsgs > 0) {
         throw new Error(`Manager ${memberId} has both chatting_percentage and chatting_percentage_messages_tips > 0 (double-counting).`);
       }
+      if (chattingPct > 0 && chattingPctNoSubs > 0) {
+        throw new Error(`Manager ${memberId} has both chatting_percentage and chatting_percentage_no_subs > 0 (double-counting).`);
+      }
+      if (gunzoPct > 0 && gunzoPctNoSubs > 0) {
+        throw new Error(`Manager ${memberId} has both gunzo_percentage and gunzo_percentage_no_subs > 0 (double-counting).`);
+      }
       const chattingPartEur = (chattingTotalNetEur * chattingPct) / 100;
       const chattingMsgsPartEur = (chattingMsgsTipsNetEur * chattingPctMsgs) / 100;
       const gunzoPartEur = (gunzoTotalNetEur * gunzoPct) / 100;
@@ -391,6 +398,8 @@ export async function computePreviewPayouts(
         gunzo_revenue: gunzoRevenue,
         chatting_percentage: chattingPct,
         gunzo_percentage: gunzoPct,
+        chatting_percentage_no_subs: chattingPctNoSubs,
+        gunzo_percentage_no_subs: gunzoPctNoSubs,
         agency_part: agencyPartEur,
         flat_fee: flatFee,
         bonus_eur: bonusEur,

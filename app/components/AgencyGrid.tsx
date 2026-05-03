@@ -8,22 +8,22 @@ import { getMarginColor } from '@/lib/business-rules';
 import EmptyState from '@/app/components/ui/EmptyState';
 import { tableWrapper, tableBase, theadTr, thBase, tbodyTr, tdBase, tdRight } from '@/app/components/ui/table-styles';
 
+export type AgencyGridSortKey = keyof AgencyRow | 'agency_cut_usd';
+
 type ColDef = {
-  key: keyof AgencyRow;
+  key: AgencyGridSortKey;
   label: string;
   align?: 'left' | 'right';
-  /** If set, cell shows USD primary + EUR subline using row[eurKey]. */
-  eurKey?: keyof AgencyRow;
+  /** If set, cell shows USD primary + EUR subline using row[eurKey] (or net_after_payouts_* when key is agency_cut_usd). */
+  eurKey?: keyof AgencyRow | 'agency_cut_eur';
 };
 
 const COLS: ColDef[] = [
-  { key: 'model_name', label: 'Model', align: 'left' },
+  { key: 'model_name', label: 'Partner', align: 'left' },
   { key: 'revenue_usd', label: 'Revenue', align: 'right', eurKey: 'revenue_eur' },
   { key: 'expenses_usd', label: 'Expenses', align: 'right', eurKey: 'expenses_eur' },
-  { key: 'profit_usd', label: 'Profit', align: 'right', eurKey: 'profit_eur' },
+  { key: 'agency_cut_usd', label: 'Agency cut', align: 'right', eurKey: 'agency_cut_eur' },
   { key: 'profit_margin_pct', label: 'Margin %', align: 'right' },
-  { key: 'payout_usd', label: 'Payouts', align: 'right', eurKey: 'payout_eur' },
-  { key: 'net_after_payouts_usd', label: 'Net after payouts', align: 'right', eurKey: 'net_after_payouts_eur' },
 ];
 
 function marginColorClass(margin: number): string {
@@ -31,6 +31,18 @@ function marginColorClass(margin: number): string {
   if (c === 'green') return 'text-[var(--green)]';
   if (c === 'yellow') return 'text-[var(--yellow)]';
   return 'text-[var(--red)]';
+}
+
+function cellMoneyUsdEur(row: AgencyRow, key: AgencyGridSortKey, eurKey: ColDef['eurKey']): { usd: number; eur: number } {
+  if (key === 'agency_cut_usd') {
+    return { usd: row.net_after_payouts_usd ?? 0, eur: row.net_after_payouts_eur ?? 0 };
+  }
+  if (eurKey != null && eurKey !== 'agency_cut_eur') {
+    const usd = typeof row[key as keyof AgencyRow] === 'number' ? (row[key as keyof AgencyRow] as number) : 0;
+    const eur = typeof row[eurKey] === 'number' ? (row[eurKey] as number) : 0;
+    return { usd, eur };
+  }
+  return { usd: 0, eur: 0 };
 }
 
 export default function AgencyGrid({
@@ -42,9 +54,9 @@ export default function AgencyGrid({
 }: {
   rows: AgencyRow[];
   totals?: AgencyMasterResponse['totals'] | null;
-  sortKey: keyof AgencyRow;
+  sortKey: AgencyGridSortKey;
   sortDir: 'asc' | 'desc';
-  onSort: (key: keyof AgencyRow) => void;
+  onSort: (key: AgencyGridSortKey) => void;
 }) {
   const router = useRouter();
   const computedTotals = rows.reduce(
@@ -160,55 +172,52 @@ export default function AgencyGrid({
                 }
               };
               return (
-              <tr
-                key={row.model_id}
-                {...(isModelRow ? { role: 'button' as const, tabIndex: 0, onClick: handleRowClick, onKeyDown: handleRowKeyDown } : {})}
-                className={`${isModelRow ? 'cursor-pointer hover:bg-white/5' : ''} ${tbodyTr} ${idx % 2 === 1 ? 'bg-white/[0.03]' : ''}`}
-              >
-                {COLS.map(({ key, align, eurKey }) => {
-                  const isMargin = key === 'profit_margin_pct';
-                  const marginVal = row.profit_margin_pct ?? 0;
-                  const numVal = typeof row[key] === 'number' ? (row[key] as number) : 0;
-                  const isNegative = eurKey != null && numVal < 0;
-                  const negClass = isNegative ? 'text-red-400/90' : '';
-                  return (
-                    <td
-                      key={String(key)}
-                      className={`${align === 'right' ? tdRight : tdBase} ${isMargin ? marginColorClass(marginVal) : ''} ${negClass}`}
-                    >
-                      {isMargin ? (
-                        <span className="inline-flex items-center gap-1.5">
-                          <span
-                            className="h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-90"
-                            aria-hidden
-                          />
-                          {formatPercentFull(marginVal)}
-                        </span>
-                      ) : key === 'model_name' ? (
-                        row.model_name
-                      ) : key === 'revenue_usd' && eurKey === 'revenue_eur' && (row.revenue_usd ?? 0) === 0 && (row.revenue_eur ?? 0) === 0 ? (
-                        <span className="block text-center text-white/40">—</span>
-                      ) : key === 'payout_usd' && eurKey === 'payout_eur' && (row.payout_usd ?? 0) === 0 && (row.payout_eur ?? 0) === 0 ? (
-                        <span className="block text-center text-white/40">—</span>
-                      ) : eurKey != null ? (
-                        <span className="block">
-                          <span className="block tabular-nums">{formatUsdFull(Number(row[key] ?? 0))}</span>
-                          <span className={`block text-xs tabular-nums ${isNegative ? 'text-red-400/70' : 'text-white/50'}`}>{formatEurFull(Number(row[eurKey] ?? 0))}</span>
-                        </span>
-                      ) : (
-                        (() => {
-                          const displayKey = `${String(key)}_display` as keyof AgencyRow;
-                          const display = row[displayKey];
-                          if (typeof display === 'string') return display;
-                          const n = row[key];
-                          return typeof n === 'number' ? formatNumberFull(n) : String(row[key] ?? '—');
-                        })()
-                      )}
-                    </td>
-                  );
-                })}
-              </tr>
-            );
+                <tr
+                  key={row.model_id}
+                  {...(isModelRow ? { role: 'button' as const, tabIndex: 0, onClick: handleRowClick, onKeyDown: handleRowKeyDown } : {})}
+                  className={`${isModelRow ? 'cursor-pointer hover:bg-white/5' : ''} ${tbodyTr} ${idx % 2 === 1 ? 'bg-white/[0.03]' : ''}`}
+                >
+                  {COLS.map(({ key, align, eurKey }) => {
+                    const isMargin = key === 'profit_margin_pct';
+                    const marginVal = row.profit_margin_pct ?? 0;
+                    const { usd: moneyUsd, eur: moneyEur } = cellMoneyUsdEur(row, key, eurKey);
+                    const isNegative = eurKey != null && moneyUsd < 0;
+                    const negClass = isNegative ? 'text-red-400/90' : '';
+                    return (
+                      <td
+                        key={String(key)}
+                        className={`${align === 'right' ? tdRight : tdBase} ${isMargin ? marginColorClass(marginVal) : ''} ${negClass}`}
+                      >
+                        {isMargin ? (
+                          <span className="inline-flex items-center gap-1.5">
+                            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-90" aria-hidden />
+                            {formatPercentFull(marginVal)}
+                          </span>
+                        ) : key === 'model_name' ? (
+                          row.model_name
+                        ) : key === 'revenue_usd' && eurKey === 'revenue_eur' && (row.revenue_usd ?? 0) === 0 && (row.revenue_eur ?? 0) === 0 ? (
+                          <span className="block text-center text-white/40">—</span>
+                        ) : key === 'agency_cut_usd' && moneyUsd === 0 && moneyEur === 0 ? (
+                          <span className="block text-center text-white/40">—</span>
+                        ) : eurKey != null ? (
+                          <span className="block">
+                            <span className="block tabular-nums">{formatUsdFull(moneyUsd)}</span>
+                            <span className={`block text-xs tabular-nums ${isNegative ? 'text-red-400/70' : 'text-white/50'}`}>{formatEurFull(moneyEur)}</span>
+                          </span>
+                        ) : (
+                          (() => {
+                            const displayKey = `${String(key)}_display` as keyof AgencyRow;
+                            const display = row[displayKey];
+                            if (typeof display === 'string') return display;
+                            const n = row[key as keyof AgencyRow];
+                            return typeof n === 'number' ? formatNumberFull(n) : String(row[key as keyof AgencyRow] ?? '—');
+                          })()
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
             })}
           </tbody>
           <tfoot>
@@ -223,18 +232,10 @@ export default function AgencyGrid({
                 <span className="block text-xs tabular-nums text-white/50">{formatEurFull(t.expenses_eur ?? 0)}</span>
               </td>
               <td className={tdRight}>
-                <span className="block tabular-nums">{formatUsdFull(t.profit_usd ?? 0)}</span>
-                <span className="block text-xs tabular-nums text-white/50">{formatEurFull(t.profit_eur ?? 0)}</span>
-              </td>
-              <td className={`${tdRight} text-purple-300`}>{formatPercentFull(marginPct)}</td>
-              <td className={tdRight}>
-                <span className="block tabular-nums">{formatUsdFull(t.payout_usd ?? 0)}</span>
-                <span className="block text-xs tabular-nums text-white/50">{formatEurFull(t.payout_eur ?? 0)}</span>
-              </td>
-              <td className={tdRight}>
                 <span className="block tabular-nums">{formatUsdFull(t.net_after_payouts_usd ?? 0)}</span>
                 <span className="block text-xs tabular-nums text-white/50">{formatEurFull(t.net_after_payouts_eur ?? 0)}</span>
               </td>
+              <td className={`${tdRight} text-purple-300`}>{formatPercentFull(marginPct)}</td>
             </tr>
           </tfoot>
         </table>

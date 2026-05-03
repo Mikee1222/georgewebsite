@@ -418,6 +418,7 @@ export interface TeamMemberRecord {
   linked_models?: string[];
   payout_type?: PayoutType;
   payout_percentage?: number;
+  payout_percentage_chatters?: number;
   payout_flat_fee?: number;
   payout_frequency?: PayoutFrequency;
   models_scope?: string[];
@@ -425,8 +426,14 @@ export interface TeamMemberRecord {
   affiliator_percentage?: number;
   /** Agency-based payout: % of chatting agency revenue (managers/production). */
   chatting_percentage?: number;
+  chatting_percentage_messages_tips?: number;
   /** Agency-based payout: % of gunzo agency revenue (managers/production). */
   gunzo_percentage?: number;
+  gunzo_percentage_messages_tips?: number;
+  /** Agency-based payout: % of chatting agency revenue without subscriptions (managers/production). */
+  chatting_percentage_no_subs?: number;
+  /** Agency-based payout: % of gunzo agency revenue without subscriptions (managers/production). */
+  gunzo_percentage_no_subs?: number;
   include_webapp_basis?: boolean;
   payout_scope?: 'agency_total_net' | 'messages_tips_net';
 }
@@ -474,12 +481,17 @@ export interface TeamMember {
   assigned_model_ids?: string[];
   payout_type: PayoutType;
   payout_percentage?: number;
+  payout_percentage_chatters?: number;
   payout_flat_fee?: number;
   payout_frequency: PayoutFrequency;
   models_scope: string[];
   affiliator_percentage?: number;
   chatting_percentage?: number;
+  chatting_percentage_messages_tips?: number;
   gunzo_percentage?: number;
+  gunzo_percentage_messages_tips?: number;
+  chatting_percentage_no_subs?: number;
+  gunzo_percentage_no_subs?: number;
   include_webapp_basis?: boolean;
   payout_scope?: 'agency_total_net' | 'messages_tips_net';
 }

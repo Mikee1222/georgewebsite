@@ -2074,7 +2074,8 @@ function PaymentsPageContent() {
                             const cme = agencyChattingMsgsTipsEur ?? (fxRate != null ? round2(cmu * fxRate) : 0);
                             const gmu = agencyGunzoMsgsTipsUsd ?? 0;
                             const gme = agencyGunzoMsgsTipsEur ?? (fxRate != null ? round2(gmu * fxRate) : 0);
-                            if (canSaveAgencyRevenue) saveAgencyRevenue(cu, ce, gu, ge, cmu, cme, gmu, gme);
+                            if (canSaveAgencyRevenue)
+                              saveAgencyRevenue(cu, ce, gu, ge, cmu, cme, gmu, gme);
                           }}
                           disabled={!canSaveAgencyRevenue || agencyRevenueSaving}
                           className="rounded-xl bg-[var(--purple-500)] px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"

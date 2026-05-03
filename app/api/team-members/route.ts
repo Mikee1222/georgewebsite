@@ -46,12 +46,17 @@ function toTeamMember(rec: AirtableRecord<TeamMemberRecord>): TeamMember {
     linked_models: linkedModels,
     payout_type: payoutType,
     payout_percentage: f.payout_percentage,
+    payout_percentage_chatters: f.payout_percentage_chatters,
     payout_flat_fee: f.payout_flat_fee,
     payout_frequency: payoutType !== 'none' ? payoutFreq : 'monthly',
     models_scope: modelsScope,
     affiliator_percentage: f.affiliator_percentage,
     chatting_percentage: f.chatting_percentage,
+    chatting_percentage_messages_tips: f.chatting_percentage_messages_tips,
     gunzo_percentage: f.gunzo_percentage,
+    gunzo_percentage_messages_tips: f.gunzo_percentage_messages_tips,
+    chatting_percentage_no_subs: f.chatting_percentage_no_subs,
+    gunzo_percentage_no_subs: f.gunzo_percentage_no_subs,
     include_webapp_basis: f.include_webapp_basis,
     payout_scope: f.payout_scope,
   };
@@ -136,6 +141,8 @@ export async function POST(request: NextRequest) {
   let chatting_percentage_messages_tips: number | undefined;
   let gunzo_percentage: number | undefined;
   let gunzo_percentage_messages_tips: number | undefined;
+  let chatting_percentage_no_subs: number | undefined;
+  let gunzo_percentage_no_subs: number | undefined;
 
   if (isChatterFlow) {
     if (pctLegacy != null) {
@@ -175,17 +182,25 @@ export async function POST(request: NextRequest) {
       typeof body.gunzo_percentage_messages_tips === 'number'
         ? (body.gunzo_percentage_messages_tips as number)
         : undefined;
+    const cpNoSubs =
+      typeof body.chatting_percentage_no_subs === 'number' ? (body.chatting_percentage_no_subs as number) : undefined;
+    const gpNoSubs =
+      typeof body.gunzo_percentage_no_subs === 'number' ? (body.gunzo_percentage_no_subs as number) : undefined;
 
     chatting_percentage = cp;
     chatting_percentage_messages_tips = cpMsgs;
     gunzo_percentage = gp;
     gunzo_percentage_messages_tips = gpMsgs;
+    chatting_percentage_no_subs = cpNoSubs;
+    gunzo_percentage_no_subs = gpNoSubs;
 
     const allPcts = [
       { key: 'chatting_percentage', value: chatting_percentage },
       { key: 'chatting_percentage_messages_tips', value: chatting_percentage_messages_tips },
       { key: 'gunzo_percentage', value: gunzo_percentage },
       { key: 'gunzo_percentage_messages_tips', value: gunzo_percentage_messages_tips },
+      { key: 'chatting_percentage_no_subs', value: chatting_percentage_no_subs },
+      { key: 'gunzo_percentage_no_subs', value: gunzo_percentage_no_subs },
     ];
     for (const { key, value } of allPcts) {
       if (value != null) {
@@ -212,6 +227,24 @@ export async function POST(request: NextRequest) {
       return badRequest(
         reqId,
         'Cannot have both gunzo_percentage and gunzo_percentage_messages_tips > 0'
+      );
+    }
+    if (
+      (chatting_percentage ?? 0) > 0 &&
+      (chatting_percentage_no_subs ?? 0) > 0
+    ) {
+      return badRequest(
+        reqId,
+        'Cannot have both chatting_percentage and chatting_percentage_no_subs > 0'
+      );
+    }
+    if (
+      (gunzo_percentage ?? 0) > 0 &&
+      (gunzo_percentage_no_subs ?? 0) > 0
+    ) {
+      return badRequest(
+        reqId,
+        'Cannot have both gunzo_percentage and gunzo_percentage_no_subs > 0'
       );
     }
   }
@@ -252,6 +285,8 @@ export async function POST(request: NextRequest) {
     chatting_percentage_messages_tips,
     gunzo_percentage,
     gunzo_percentage_messages_tips,
+    chatting_percentage_no_subs,
+    gunzo_percentage_no_subs,
     payout_flat_fee: flatFeeSource,
     models_scope: models_scope.length > 0 ? models_scope : undefined,
     // payout_scope is deprecated for new creates; ignore if present

@@ -22,6 +22,26 @@ import TableSkeleton from '@/app/components/ui/TableSkeleton';
 
 const MARKETING_EXPENSE_CATEGORIES_PARAM = 'marketing_tools,production_tools,marketing_other,production_other';
 
+function marketingProductionTotalsFromEntries(list: ExpenseEntry[]): {
+  marketing_eur: number;
+  production_eur: number;
+  total_eur: number;
+} {
+  let marketing_eur = 0;
+  let production_eur = 0;
+  for (const e of list) {
+    const eur =
+      typeof e.amount_eur === 'number' && Number.isFinite(e.amount_eur)
+        ? e.amount_eur
+        : typeof e.amount === 'number' && Number.isFinite(e.amount)
+          ? e.amount
+          : 0;
+    if (e.category === 'marketing_tools' || e.category === 'marketing_other') marketing_eur += eur;
+    else production_eur += eur;
+  }
+  return { marketing_eur, production_eur, total_eur: marketing_eur + production_eur };
+}
+
 /** Payout line from GET /api/payouts?source=live (same computation as /payments). */
 type PayoutLine = {
   id: string;
@@ -68,6 +88,18 @@ function MarketingPageContent() {
   const [addBusy, setAddBusy] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
   const [addForm, setAddForm] = useState<{
+    department: 'marketing' | 'production';
+    category: string;
+    amount_eur: string;
+    description: string;
+  }>({ department: 'marketing', category: 'marketing_tools', amount_eur: '', description: '' });
+  const [deleteConfirmExpense, setDeleteConfirmExpense] = useState<ExpenseEntry | null>(null);
+  const [deleteExpenseBusy, setDeleteExpenseBusy] = useState(false);
+  const [deleteExpenseError, setDeleteExpenseError] = useState<string | null>(null);
+  const [editExpense, setEditExpense] = useState<ExpenseEntry | null>(null);
+  const [editBusy, setEditBusy] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<{
     department: 'marketing' | 'production';
     category: string;
     amount_eur: string;
@@ -244,6 +276,122 @@ function MarketingPageContent() {
       setAddBusy(false);
     }
   }
+
+  function openEditExpense(row: ExpenseEntry) {
+    const department: 'marketing' | 'production' = row.category?.startsWith('production') ? 'production' : 'marketing';
+    const amount =
+      typeof row.amount_eur === 'number' && Number.isFinite(row.amount_eur)
+        ? row.amount_eur
+        : typeof row.amount === 'number' && Number.isFinite(row.amount)
+          ? row.amount
+          : '';
+    setEditForm({
+      department,
+      category:
+        MARKETING_PRODUCTION_CATEGORY_VALUES.includes(row.category as (typeof MARKETING_PRODUCTION_CATEGORY_VALUES)[number])
+          ? row.category
+          : department === 'production'
+            ? 'production_tools'
+            : 'marketing_tools',
+      amount_eur: amount === '' ? '' : String(amount),
+      description: row.description ?? '',
+    });
+    setEditExpense(row);
+    setEditError(null);
+  }
+
+  async function handleEditExpense(e: React.FormEvent) {
+    e.preventDefault();
+    if (editBusy || !editExpense || !monthId) return;
+    const department = editForm.department;
+    const rawCategory = editForm.category?.trim() || (department === 'production' ? 'production_tools' : 'marketing_tools');
+    const category = MARKETING_PRODUCTION_CATEGORY_VALUES.includes(rawCategory as (typeof MARKETING_PRODUCTION_CATEGORY_VALUES)[number])
+      ? rawCategory
+      : department === 'production'
+        ? 'production_tools'
+        : 'marketing_tools';
+    const amountEur = parseFloat(editForm.amount_eur);
+    if (Number.isNaN(amountEur) || amountEur <= 0) {
+      setEditError('Enter a valid amount (EUR) greater than 0');
+      return;
+    }
+    setEditBusy(true);
+    setEditError(null);
+    try {
+      const res = await fetch(`/api/expenses/${editExpense.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          amount_eur: amountEur,
+          category,
+          department,
+          description: editForm.description?.trim() || '',
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as Partial<ExpenseEntry> & { error?: string };
+      if (!res.ok) {
+        setEditError(data.error ?? 'Failed to update expense');
+        return;
+      }
+      const updated: ExpenseEntry = {
+        id: data.id ?? editExpense.id,
+        month_id: data.month_id ?? editExpense.month_id,
+        amount: typeof data.amount === 'number' ? data.amount : editExpense.amount,
+        amount_usd: data.amount_usd ?? editExpense.amount_usd,
+        amount_eur: data.amount_eur ?? editExpense.amount_eur,
+        category: data.category ?? category,
+        department: data.department ?? department,
+        cost_owner_type: data.cost_owner_type ?? editExpense.cost_owner_type,
+        model_id: data.model_id ?? editExpense.model_id,
+        team_member_id: data.team_member_id ?? editExpense.team_member_id,
+        description: data.description ?? editForm.description?.trim() ?? '',
+        vendor: data.vendor ?? editExpense.vendor,
+        date: data.date ?? editExpense.date,
+        created_by: data.created_by ?? editExpense.created_by,
+        receipt_url: data.receipt_url ?? editExpense.receipt_url,
+        created_at: data.created_at ?? editExpense.created_at,
+      };
+      setExpenses((prev) => {
+        const next = prev.map((x) => (x.id === updated.id ? updated : x));
+        setExpenseTotals(marketingProductionTotalsFromEntries(next));
+        return next;
+      });
+      setEditExpense(null);
+    } finally {
+      setEditBusy(false);
+    }
+  }
+
+  async function confirmDeleteExpense() {
+    const row = deleteConfirmExpense;
+    if (!row || deleteExpenseBusy) return;
+    setDeleteExpenseBusy(true);
+    setDeleteExpenseError(null);
+    try {
+      const res = await fetch(`/api/expenses/${row.id}`, { method: 'DELETE', credentials: 'include' });
+      const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      if (!res.ok || !data.ok) {
+        setDeleteExpenseError((data.error as string | undefined) ?? 'Failed to delete expense');
+        return;
+      }
+      setExpenses((prev) => {
+        const next = prev.filter((x) => x.id !== row.id);
+        setExpenseTotals(marketingProductionTotalsFromEntries(next));
+        return next;
+      });
+      setDeleteConfirmExpense(null);
+    } finally {
+      setDeleteExpenseBusy(false);
+    }
+  }
+
+  const canSubmitEdit =
+    Boolean(monthId) &&
+    editExpense &&
+    (editForm.department === 'marketing' || editForm.department === 'production') &&
+    MARKETING_PRODUCTION_CATEGORY_VALUES.includes(editForm.category as (typeof MARKETING_PRODUCTION_CATEGORY_VALUES)[number]) &&
+    editForm.amount_eur.trim() !== '';
 
   const canSubmitAdd =
     Boolean(monthId) &&
@@ -430,11 +578,133 @@ function MarketingPageContent() {
           </SheetForm>
         )}
 
+        {editExpense && (
+          <SheetForm
+            open
+            onOpenChange={(o) => {
+              if (!o) {
+                setEditExpense(null);
+                setEditError(null);
+              }
+            }}
+            title="Edit expense"
+            subtitle={monthId ? `Month: ${formatMonthLabel(months.find((m) => m.id === monthId)?.month_key ?? '') || monthId}` : undefined}
+            footer={
+              <div className="flex gap-2">
+                <button
+                  type="submit"
+                  form="marketing-edit-expense-form"
+                  disabled={editBusy || !canSubmitEdit}
+                  className="btn-primary flex-1 rounded-xl py-2.5 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {editBusy ? 'Saving…' : 'Save'}
+                </button>
+                <button type="button" onClick={() => setEditExpense(null)} className="btn flex-1 rounded-xl py-2.5 text-sm">
+                  Cancel
+                </button>
+              </div>
+            }
+          >
+            <form id="marketing-edit-expense-form" onSubmit={handleEditExpense} className="space-y-4">
+              <FormRow label="Department" required>
+                <SmartSelect
+                  value={editForm.department}
+                  onValueChange={(v) => {
+                    const d = v === 'production' ? 'production' : 'marketing';
+                    setEditForm((f) => ({
+                      ...f,
+                      department: d,
+                      category: d === 'production' ? 'production_tools' : 'marketing_tools',
+                    }));
+                  }}
+                  options={[
+                    { value: 'marketing', label: 'Marketing' },
+                    { value: 'production', label: 'Production' },
+                  ]}
+                  placeholder="Select department"
+                  allowClear={false}
+                />
+              </FormRow>
+              <FormRow label="Category" required>
+                <SmartSelect
+                  value={editForm.category || null}
+                  onValueChange={(c) => setEditForm((f) => ({ ...f, category: c ?? 'marketing_tools' }))}
+                  options={categoryOptionsByDept[editForm.department].map((c) => ({ value: c.value, label: c.label }))}
+                  placeholder="Select category"
+                  allowClear={false}
+                />
+              </FormRow>
+              <FormRow label="Amount (EUR)" required>
+                <div className="flex rounded-xl border border-[var(--stroke)] bg-[rgba(26,28,36,0.7)] focus-within:border-[var(--purple-500)] focus-within:ring-2 focus-within:ring-[var(--purple-glow)]">
+                  <span className="flex items-center pl-3 text-sm text-[var(--text-muted)]">€</span>
+                  <input
+                    type="number"
+                    step="any"
+                    min="0"
+                    required
+                    value={editForm.amount_eur}
+                    onChange={(e) => setEditForm((f) => ({ ...f, amount_eur: e.target.value }))}
+                    className="w-full bg-transparent px-2 py-2.5 text-sm text-[var(--text)] outline-none"
+                  />
+                </div>
+              </FormRow>
+              <FormRow label="Description">
+                <textarea
+                  value={editForm.description}
+                  onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))}
+                  rows={2}
+                  placeholder="Optional"
+                  className="w-full resize-none rounded-xl border border-[var(--stroke)] bg-[rgba(26,28,36,0.7)] px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text-muted)]/60 focus:border-[var(--purple-500)] focus:ring-2 focus:ring-[var(--purple-glow)]"
+                />
+              </FormRow>
+              {editError && <p className="text-sm text-[var(--danger)]" role="alert">{editError}</p>}
+            </form>
+          </SheetForm>
+        )}
+
+        {deleteConfirmExpense && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
+            onClick={() => !deleteExpenseBusy && (setDeleteConfirmExpense(null), setDeleteExpenseError(null))}
+          >
+            <div
+              className="w-full max-w-sm rounded-2xl border border-white/10 bg-zinc-950/85 p-6 shadow-xl backdrop-blur-xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="mb-2 text-lg font-semibold text-white/90">Delete expense</h3>
+              <p className="mb-4 text-sm text-white/60">Remove this expense entry? This cannot be undone.</p>
+              {deleteExpenseError && (
+                <p className="mb-3 text-sm text-[var(--danger)]" role="alert">
+                  {deleteExpenseError}
+                </p>
+              )}
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={confirmDeleteExpense}
+                  disabled={deleteExpenseBusy}
+                  className="flex-1 rounded-xl bg-red-600/90 py-2.5 text-sm font-medium text-white hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {deleteExpenseBusy ? 'Deleting…' : 'Delete'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => !deleteExpenseBusy && (setDeleteConfirmExpense(null), setDeleteExpenseError(null))}
+                  disabled={deleteExpenseBusy}
+                  className="btn flex-1 rounded-xl py-2.5 text-sm"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {error && monthId && (
           <ErrorState title="Could not load expenses" description={error.message} requestId={error.requestId ?? undefined} />
         )}
 
-        {loading && monthId && <TableSkeleton rows={5} cols={4} />}
+        {loading && monthId && <TableSkeleton rows={5} cols={canEdit ? 5 : 4} />}
 
         {!loading && !monthId && (
           <EmptyState title="Select a month" description="Choose a month above to view marketing/production payroll and expenses." />
@@ -446,13 +716,16 @@ function MarketingPageContent() {
 
         {!loading && monthId && !error && expenses.length > 0 && (
           <div className="overflow-x-auto rounded-2xl border border-white/10 bg-white/5 shadow-lg shadow-black/30 backdrop-blur-xl">
-            <table className="w-full min-w-[500px] border-collapse text-sm">
+            <table className={`w-full border-collapse text-sm ${canEdit ? 'min-w-[620px]' : 'min-w-[500px]'}`}>
               <thead>
                 <tr className="border-b border-white/10 bg-white/6">
                   <th className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wider text-white/80">Category</th>
                   <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wider text-white/80">Amount EUR</th>
                   <th className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wider text-white/80">Description</th>
                   <th className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wider text-white/80">Created</th>
+                  {canEdit && (
+                    <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wider text-white/80">Actions</th>
+                  )}
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/10">
@@ -468,6 +741,27 @@ function MarketingPageContent() {
                     </td>
                     <td className="max-w-[280px] truncate px-3 py-2.5 text-white/70">{row.description || '—'}</td>
                     <td className="px-3 py-2.5 text-white/60 text-xs">{formatCreated(row.created_at)}</td>
+                    {canEdit && (
+                      <td className="whitespace-nowrap px-3 py-2.5 text-right">
+                        <button
+                          type="button"
+                          onClick={() => openEditExpense(row)}
+                          className="mr-3 text-xs text-purple-300 hover:underline"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDeleteExpenseError(null);
+                            setDeleteConfirmExpense(row);
+                          }}
+                          className="text-xs text-white/60 hover:text-red-300 hover:underline"
+                        >
+                          Delete
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>

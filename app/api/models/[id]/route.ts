@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getModel, updateModel, writeAuditLog } from '@/lib/airtable';
+import { getModel, updateModel, writeAuditLog, deleteRecordById } from '@/lib/airtable';
 import { getSessionFromRequest, canManageModels } from '@/lib/auth';
 import { requestId, serverError, unauthorized, forbidden, badRequest } from '@/lib/api-utils';
 import type { ModelsRecord } from '@/lib/types';
@@ -7,24 +7,50 @@ import type { AirtableRecord } from '@/lib/types';
 
 export const runtime = 'edge';
 
-/** Soft-delete: set status to Inactive. No Airtable record removal. */
+/** Default / ?mode=soft: set status to Inactive. ?mode=hard: remove the Airtable record. */
 export async function DELETE(
-  _request: Request,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const reqId = requestId();
-  const session = await getSessionFromRequest(_request.headers.get('cookie'));
+  const session = await getSessionFromRequest(request.headers.get('cookie'));
   if (!session) return unauthorized(reqId);
   if (!canManageModels(session.role)) return forbidden(reqId, 'Forbidden: admin only');
 
   const { id } = await params;
   if (!id) return badRequest(reqId, 'id required');
 
+  const mode = request.nextUrl.searchParams.get('mode') ?? 'soft';
+  const hard = mode === 'hard';
+
   const existing = await getModel(id);
   if (!existing) {
     const res = NextResponse.json({ error: 'Model not found', requestId: reqId }, { status: 404 });
     res.headers.set('request-id', reqId);
     return res;
+  }
+
+  if (hard) {
+    try {
+      await writeAuditLog({
+        user_email: session.email,
+        table: 'models',
+        record_id: id,
+        field_name: 'delete',
+        old_value: JSON.stringify({
+          name: existing.fields.name,
+          status: existing.fields.status,
+        }),
+        new_value: 'HARD_DELETED',
+      });
+      await deleteRecordById('models', id);
+      const res = NextResponse.json({ ok: true, id, deleted: true });
+      res.headers.set('request-id', reqId);
+      return res;
+    } catch (e) {
+      if (process.env.NODE_ENV === 'development') console.error('[api/models DELETE hard]', e);
+      return serverError(reqId, e, { route: `/api/models/${id}` });
+    }
   }
 
   const currentStatus = (existing.fields.status ?? 'Active') as string;
