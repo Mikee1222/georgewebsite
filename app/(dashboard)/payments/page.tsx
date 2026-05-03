@@ -2117,7 +2117,7 @@ function PaymentsPageContent() {
               ) : (
                 <div className="overflow-x-auto rounded-2xl border border-white/10 bg-white/5 shadow-lg shadow-black/30 backdrop-blur-xl">
                   <TableWithEmpty<BasisRow>
-                    headers={['Month', 'Member', 'Gross USD', 'Payout %', 'Base payout USD', 'Created', '']}
+                    headers={['Month', 'Member', 'Net USD', 'Payout %', 'Base payout USD', 'Created', '']}
                     rows={salesRows}
                     emptyTitle="No chatter sales entries"
                     emptyDescription="Add chatter sales for this month."
@@ -2238,7 +2238,7 @@ function PaymentsPageContent() {
               ) : (
                 <div className="overflow-x-auto rounded-2xl border border-white/10 bg-white/5 shadow-lg shadow-black/30 backdrop-blur-xl">
                   <TableWithEmpty
-                    headers={['Month', 'Member', 'Gross USD', 'Payout %', 'Base payout USD', 'Bonus EUR', 'Fine EUR', 'Final payout']}
+                    headers={['Month', 'Member', 'Net USD', 'Payout %', 'Base payout USD', 'Bonus EUR', 'Fine EUR', 'Final payout']}
                     rows={summaryByMemberMonth}
                     emptyTitle="No payout data"
                     emptyDescription="Add chatter sales to see summary."
