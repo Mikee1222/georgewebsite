@@ -119,6 +119,7 @@ export async function GET(request: NextRequest) {
       const notes = (r.fields.notes ?? '') as string;
 
       if (basisType === 'chatter_sales') {
+        // amount_usd on chatter_sales rows is OnlyFans **net** (gross × 0.80); `gross_usd` here sums that net for base = net × pct / 100.
         const amountUsd = typeof r.fields.amount_usd === 'number' ? r.fields.amount_usd : 0;
         row.gross_usd += amountUsd;
         const pct = parsePayoutPctFromNotes(notes);

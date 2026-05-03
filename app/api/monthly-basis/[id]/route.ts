@@ -9,6 +9,24 @@ export const runtime = 'edge';
 
 const PATCH_BODY_ALLOWED = new Set(['amount', 'amount_usd', 'gross_usd', 'amount_eur', 'notes', 'payout_pct', 'team_member_id']);
 
+const OF_NET = 0.8;
+
+function stripGrossLines(notes: string): string {
+  return notes
+    .split('\n')
+    .filter((line) => !/^GROSS:[\d.]+$/i.test(line.trim()))
+    .join('\n')
+    .trim();
+}
+
+function parseGrossFromChatterNotes(notes: string | undefined): number | undefined {
+  if (!notes?.trim()) return undefined;
+  const m = notes.match(/(?:^|\n)GROSS:([\d.]+)/i);
+  if (!m) return undefined;
+  const n = Number(m[1]);
+  return Number.isFinite(n) ? n : undefined;
+}
+
 function assertNoUnknownBodyKeys(body: Record<string, unknown>, allowed: Set<string>, reqId: string): void {
   for (const key of Object.keys(body)) {
     if (!allowed.has(key)) {
@@ -45,7 +63,10 @@ export async function PATCH(
 
   const team_member_id = typeof body.team_member_id === 'string' ? body.team_member_id.trim() : undefined;
   const amount = body.amount !== undefined ? Number(body.amount) : undefined;
-  const amount_usd = (body.amount_usd ?? body.gross_usd) !== undefined ? Number(body.amount_usd ?? body.gross_usd) : undefined;
+  const amount_usd =
+    body.amount_usd !== undefined || body.gross_usd !== undefined
+      ? Number(body.amount_usd ?? body.gross_usd)
+      : undefined;
   const amount_eur = body.amount_eur !== undefined ? Number(body.amount_eur) : undefined;
   const payout_pct = body.payout_pct !== undefined ? Number(body.payout_pct) : undefined;
   if (amount !== undefined && (Number.isNaN(amount) || amount < 0)) {
@@ -70,6 +91,7 @@ export async function PATCH(
     const notesWithoutPct = existingNotes.includes('\n')
       ? existingNotes.split('\n').slice(1).join('\n').trim()
       : (/^PCT:[\d.]+$/i.test(existingNotes.split('\n')[0] ?? '') ? existingNotes.split('\n').slice(1).join('\n').trim() : existingNotes);
+    const notesWithoutPctAndGross = stripGrossLines(notesWithoutPct);
 
     let notesValue: string | undefined;
     if (body.notes !== undefined) notesValue = body.notes;
@@ -79,15 +101,48 @@ export async function PATCH(
 
     const fields: Partial<{ amount: number; amount_usd: number; amount_eur: number; notes: string; team_member: string[] }> = {};
     if (amount !== undefined) fields.amount = amount;
-    if (amount_usd !== undefined) fields.amount_usd = amount_usd;
-    if (amount_eur !== undefined) fields.amount_eur = amount_eur;
-    if (notesValue !== undefined) fields.notes = notesValue;
+
+    const chatterAmountUpdate =
+      basisType === 'chatter_sales' && (body.amount_usd !== undefined || body.gross_usd !== undefined);
+    if (chatterAmountUpdate && amount_usd !== undefined && !Number.isNaN(amount_usd) && amount_usd >= 0) {
+      const grossInput = amount_usd;
+      const netUsd = grossInput * OF_NET;
+      fields.amount_usd = netUsd;
+      const pctForNotes =
+        payout_pct !== undefined && !Number.isNaN(payout_pct)
+          ? payout_pct
+          : (() => {
+              const first = existingNotes.split('\n')[0]?.trim() ?? '';
+              const m = /^PCT:(\d+(?:\.\d+)?)$/i.exec(first);
+              return m ? Number(m[1]) : undefined;
+            })();
+      const userTail =
+        body.notes !== undefined
+          ? body.notes.trim()
+          : notesWithoutPctAndGross;
+      let rebuilt =
+        pctForNotes != null && !Number.isNaN(pctForNotes)
+          ? `PCT:${pctForNotes}${userTail ? `\n${userTail}` : ''}`
+          : userTail;
+      rebuilt = `${rebuilt}${rebuilt ? '\n' : ''}GROSS:${grossInput.toFixed(2)}`;
+      fields.notes = rebuilt;
+    } else {
+      if (amount_usd !== undefined && !chatterAmountUpdate) fields.amount_usd = amount_usd;
+      if (amount_eur !== undefined) fields.amount_eur = amount_eur;
+      if (notesValue !== undefined) fields.notes = notesValue;
+    }
+
     if (team_member_id) fields.team_member = [team_member_id];
     if (fields.amount_usd !== undefined || fields.amount_eur !== undefined) {
       const existingUsd = existing.fields.amount_usd as number | undefined;
       const existingEur = existing.fields.amount_eur as number | undefined;
       let payloadUsd = fields.amount_usd ?? existingUsd;
-      let payloadEur = fields.amount_eur ?? existingEur;
+      let payloadEur =
+        fields.amount_eur !== undefined
+          ? fields.amount_eur
+          : chatterAmountUpdate
+            ? undefined
+            : existingEur;
       const origin = new URL(request.url).origin;
       const fx = await getFxRateForServer(origin);
       const { amount_usd: fu, amount_eur: fe } = ensureDualAmounts(payloadUsd, payloadEur, fx?.rate ?? null);

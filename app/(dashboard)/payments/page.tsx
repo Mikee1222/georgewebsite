@@ -124,6 +124,29 @@ interface BasisRow {
 }
 
 const FINE_NOTES_PREFIX = 'FINE:';
+/** OnlyFans keeps ~20%; stored `amount_usd` is net for new rows (see GROSS: in notes). Legacy rows have gross in `amount_usd` until migrated. */
+const OF_NET = 0.8;
+
+function chatterDisplayGrossUsd(row: Pick<BasisRow, 'notes' | 'amount_usd' | 'amount'>): number {
+  const notes = row.notes ?? '';
+  const m = notes.match(/(?:^|\n)GROSS:([\d.]+)/i);
+  if (m) {
+    const g = parseFloat(m[1]);
+    if (Number.isFinite(g)) return g;
+  }
+  const usd = row.amount_usd ?? row.amount ?? 0;
+  if (notes.includes('MIGRATED_NET:')) return usd > 0 ? usd / OF_NET : 0;
+  return usd;
+}
+
+/** Net USD used for payout base (net × payout_pct). */
+function chatterNetUsdForPayout(row: Pick<BasisRow, 'notes' | 'amount_usd' | 'amount'>): number {
+  const usd = row.amount_usd ?? row.amount ?? 0;
+  const notes = row.notes ?? '';
+  if (notes.match(/(?:^|\n)GROSS:/i) || notes.includes('MIGRATED_NET:')) return usd;
+  return usd * OF_NET;
+}
+
 function isFineRow(row: BasisRow): boolean {
   return (
     (row.basis_type === 'adjustment' && (row.notes?.startsWith(FINE_NOTES_PREFIX) ?? false)) ||
@@ -1666,10 +1689,10 @@ function PaymentsPageContent() {
     const isSales = editBasisRow.basis_type === 'chatter_sales';
     const isBonus = editBasisRow.basis_type === 'bonus';
     const isFine = isFineRow(editBasisRow);
-    const payload: { amount_usd?: number; amount_eur?: number; notes?: string; payout_pct?: number } = {};
+    const payload: { amount_usd?: number; gross_usd?: number; amount_eur?: number; notes?: string; payout_pct?: number } = {};
     if (isSales) {
       const usd = editAmountUsd;
-      if (typeof usd === 'number' && !Number.isNaN(usd) && usd >= 0) payload.amount_usd = usd;
+      if (typeof usd === 'number' && !Number.isNaN(usd) && usd >= 0) payload.gross_usd = usd;
       const pct = editPayoutPct.trim() ? parseFloat(editPayoutPct) : undefined;
       if (pct !== undefined && Number.isFinite(pct) && pct >= 0 && pct <= 100) payload.payout_pct = pct;
       payload.notes = editNotes.trim() || undefined;
@@ -1716,9 +1739,17 @@ function PaymentsPageContent() {
     setEditBasisRow(row);
     const amountForEdit = isFineRow(row)
       ? Math.abs(typeof row.amount_eur === 'number' ? row.amount_eur : row.amount ?? 0)
-      : (row.amount_usd ?? row.amount);
+      : row.basis_type === 'chatter_sales'
+        ? chatterDisplayGrossUsd(row)
+        : (row.amount_usd ?? row.amount);
     setEditAmountUsd(amountForEdit);
-    setEditNotes(row.notes?.replace(/^PCT:[\d.]+\n?/i, '').trim() ?? '');
+    setEditNotes(
+      row.notes
+        ?.replace(/^PCT:[\d.]+\n?/i, '')
+        .replace(/(?:^|\n)GROSS:[\d.]+\s*/gi, '')
+        .replace(/\s*MIGRATED_NET:true\s*/gi, '')
+        .trim() ?? ''
+    );
     setEditPayoutPct(row.basis_type === 'chatter_sales' && row.payout_pct != null ? String(row.payout_pct) : '');
     setEditReason(row.basis_type === 'bonus' ? (row.notes ?? '') : isFineRow(row) ? fineReasonFromNotes(row.notes ?? '') : '');
   };
@@ -1742,14 +1773,15 @@ function PaymentsPageContent() {
       if (!map.has(key)) {
         const member = teamMembers.find((m) => m.id === r.team_member_id);
         const pct = basisType === 'chatter_sales' ? (r.payout_pct ?? member?.payout_percentage ?? 0) : 0;
-        const gross = basisType === 'chatter_sales' ? (r.amount_usd ?? r.amount ?? 0) : 0;
+        const gross = basisType === 'chatter_sales' ? chatterDisplayGrossUsd(r) : 0;
+        const netUsd = basisType === 'chatter_sales' ? chatterNetUsdForPayout(r) : 0;
         map.set(key, {
           month_id: r.month_id,
           month_key: r.month_key,
           member_id: r.team_member_id || (r.team_member_numeric_id != null ? String(r.team_member_numeric_id) : ''),
           gross_usd: gross,
           payout_pct: pct,
-          base_payout_usd: (gross * pct) / 100,
+          base_payout_usd: basisType === 'chatter_sales' ? (netUsd * pct) / 100 : (gross * pct) / 100,
           bonus_total_eur: 0,
           fine_total_eur: 0,
           final_payout_usd: 0,
@@ -1759,10 +1791,11 @@ function PaymentsPageContent() {
       const row = map.get(key)!;
       if (basisType === 'chatter_sales') {
         const pct = r.payout_pct ?? teamMembers.find((m) => m.id === r.team_member_id)?.payout_percentage ?? 0;
-        const gross = r.amount_usd ?? r.amount ?? 0;
+        const gross = chatterDisplayGrossUsd(r);
+        const netUsd = chatterNetUsdForPayout(r);
         row.gross_usd = gross;
         row.payout_pct = pct;
-        row.base_payout_usd = (gross * pct) / 100;
+        row.base_payout_usd = (netUsd * pct) / 100;
       } else if (basisType === 'bonus') {
         const amountEur = typeof r.amount_eur === 'number' ? r.amount_eur : (r.amount ?? 0);
         row.bonus_total_eur += amountEur;
@@ -2066,8 +2099,10 @@ function PaymentsPageContent() {
             </section>
 
             <section className="space-y-3" data-input-section="chatter_sales">
-              <h2 className="text-lg font-medium text-white/90">Chatter sales (monthly gross USD)</h2>
-              <p className="text-sm text-white/60">Input data (no payout run required). One record per member per month. Base payout = gross_usd × payout_pct. Store USD as source of truth.</p>
+              <h2 className="text-lg font-medium text-white/90">Chatter sales (OnlyFans gross → net stored)</h2>
+              <p className="text-sm text-white/60">
+                Enter OnlyFans gross USD per member per month. We store net USD (gross × 0.80) and a GROSS: audit line in notes. Base payout = net × payout_pct.
+              </p>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -2905,7 +2940,9 @@ function PaymentsPageContent() {
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setSalesModalOpen(false)}>
             <div className="max-h-[calc(100vh-2rem)] w-full max-w-md overflow-y-auto rounded-2xl border border-white/10 bg-zinc-900 p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
               <h3 className="text-lg font-semibold text-white">Add chatter sales</h3>
-              <p className="mt-1 text-sm text-white/70">Gross USD (OnlyFans). Base payout = gross × payout_pct. Member and month are required.</p>
+              <p className="mt-1 text-sm text-white/70">
+                Gross USD (OnlyFans). Net = gross × 0.80 stored. Base payout = net × payout_pct. Member and month are required.
+              </p>
               <div className="mt-4 space-y-3">
                 <div>
                   <label className="block text-xs font-medium text-white/70">Member (required)</label>
@@ -2945,6 +2982,18 @@ function PaymentsPageContent() {
                     className="mt-1 w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/90"
                   />
                 </div>
+                {(() => {
+                  const g = parseFloat(salesForm.grossUsd);
+                  const grossVal = Number.isFinite(g) && g >= 0 ? g : 0;
+                  return (
+                    <div>
+                      <label className="block text-xs font-medium text-white/70">Net USD (after 20% OF fee)</label>
+                      <div className="mt-1 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm font-mono text-white/90">
+                        {(grossVal * OF_NET).toFixed(2)}
+                      </div>
+                    </div>
+                  );
+                })()}
                 <div>
                   <label className="block text-xs font-medium text-white/70">Payout % (editable)</label>
                   <input
@@ -2971,11 +3020,11 @@ function PaymentsPageContent() {
                   <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm">
                     <span className="text-white/70">Base payout USD: </span>
                     <span className="font-mono text-white/90">
-                      {((parseFloat(salesForm.grossUsd) || 0) * (parseFloat(salesForm.payoutPct) || 0) / 100).toFixed(2)}
+                      {(((parseFloat(salesForm.grossUsd) || 0) * OF_NET) * (parseFloat(salesForm.payoutPct) || 0) / 100).toFixed(2)}
                     </span>
                     {fxRate != null && (
                       <span className="ml-2 text-white/60">
-                        {((parseFloat(salesForm.grossUsd) || 0) * (parseFloat(salesForm.payoutPct) || 0) / 100 * fxRate).toFixed(2)} EUR
+                        {(((parseFloat(salesForm.grossUsd) || 0) * OF_NET) * (parseFloat(salesForm.payoutPct) || 0) / 100 * fxRate).toFixed(2)} EUR
                       </span>
                     )}
                   </div>
@@ -3268,6 +3317,11 @@ function PaymentsPageContent() {
             <div className="max-h-[calc(100vh-2rem)] w-full max-w-md overflow-y-auto rounded-2xl border border-white/10 bg-zinc-900 p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
               <h3 className="text-lg font-semibold text-white">Edit {editBasisRow.basis_type === 'chatter_sales' ? 'chatter sales' : isFineRow(editBasisRow) ? 'fine' : 'bonus'}</h3>
               <p className="mt-1 text-sm text-white/70">{memberDisplay(editBasisRow)}</p>
+              {editBasisRow.basis_type === 'chatter_sales' && (
+                <p className="mt-1 text-xs text-white/55">
+                  Gross USD (OnlyFans). Net = gross × 0.80 stored. Base payout = net × payout_pct.
+                </p>
+              )}
               <div className="mt-4 space-y-3">
                 {editBasisRow.basis_type === 'chatter_sales' && (
                   <>
@@ -3281,6 +3335,15 @@ function PaymentsPageContent() {
                         onChange={(e) => setEditAmountUsd(e.target.value === '' ? undefined : parseFloat(e.target.value))}
                         className="mt-1 w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/90"
                       />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-white/70">Net USD (after 20% OF fee)</label>
+                      <div className="mt-1 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm font-mono text-white/90">
+                        {(() => {
+                          const g = typeof editAmountUsd === 'number' && !Number.isNaN(editAmountUsd) ? editAmountUsd : 0;
+                          return (g * OF_NET).toFixed(2);
+                        })()}
+                      </div>
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-white/70">Payout %</label>

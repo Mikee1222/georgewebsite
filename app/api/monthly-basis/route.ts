@@ -192,12 +192,16 @@ export async function POST(request: NextRequest) {
 
   let effectiveUsd: number | undefined;
   let effectiveEur: number | undefined;
+  /** OnlyFans gross USD (for chatter_sales notes audit line GROSS:...). */
+  let chatterGrossUsd: number | undefined;
   if (isChatterSales) {
     const gross = typeof body.gross_usd === 'number' ? body.gross_usd : body.amount_usd;
     if (typeof gross !== 'number' || Number.isNaN(gross) || gross < 0) {
       return badRequest(reqId, 'chatter_sales requires gross_usd (non-negative number)');
     }
-    effectiveUsd = gross;
+    chatterGrossUsd = gross;
+    // OnlyFans takes 20% — persist net USD (gross × 0.80)
+    effectiveUsd = gross * 0.8;
   } else {
     const isBonus = basis_type === 'bonus';
     const isFineBasis = isFine;
@@ -232,10 +236,13 @@ export async function POST(request: NextRequest) {
   const fx = await getFxRateForServer(origin);
   const { amount_usd: finalUsd, amount_eur: finalEur } = ensureDualAmounts(effectiveUsd, effectiveEur, fx?.rate ?? null);
 
-  const notes =
+  let notes =
     isChatterSales && payoutPct != null
       ? `PCT:${payoutPct}${notesContent ? `\n${notesContent}` : ''}`
       : notesContent;
+  if (isChatterSales && chatterGrossUsd != null && !Number.isNaN(chatterGrossUsd) && chatterGrossUsd >= 0) {
+    notes = `${notes}${notes ? '\n' : ''}GROSS:${chatterGrossUsd.toFixed(2)}`;
+  }
 
   const resolvedMonthKey = month_key || (month_id ? await getMonthKeyFromId(month_id) : null);
 
