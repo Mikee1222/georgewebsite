@@ -142,6 +142,15 @@ export async function POST(request: NextRequest) {
 
     const invalidTeamMemberIds: string[] = [];
     for (const line of payload) {
+      const previewTid = (line.preview_team_member_id ?? line.team_member_id ?? '').trim();
+      if (line.category === 'model' && !previewTid.startsWith('model-')) {
+        const tid = line.team_member_id?.trim();
+        if (!tid || !teamMembersSet.has(tid)) {
+          if (tid) invalidTeamMemberIds.push(tid);
+          else invalidTeamMemberIds.push('(missing)');
+        }
+        continue;
+      }
       const isModelLine = Boolean(line.model_id?.trim());
       if (isModelLine) {
         if (line.team_member_id?.trim() && !teamMembersSet.has(line.team_member_id.trim())) {
@@ -171,7 +180,59 @@ export async function POST(request: NextRequest) {
     }
 
     const run = await getOrCreatePayoutRun(month_id);
-    await upsertPayoutLines(run.id, payload);
+
+    if (process.env.NODE_ENV === 'development' && typeof console !== 'undefined') {
+      console.log('[api/payout-runs/save-computed] upsertPayoutLines payload', {
+        runId: run.id,
+        payloadLength: payload.length,
+        sample: payload.slice(0, 2).map((l) => ({
+          team_member_id: l.team_member_id,
+          model_id: l.model_id,
+          department: l.department,
+          role: l.role,
+          payout_type: l.payout_type,
+          payout_amount: l.payout_amount,
+          amount_eur: l.amount_eur,
+          amount_usd: l.amount_usd,
+        })),
+      });
+    }
+
+    let upserted;
+    try {
+      upserted = await upsertPayoutLines(run.id, payload);
+    } catch (upsertErr) {
+      if (process.env.NODE_ENV === 'development' && typeof console !== 'undefined') {
+        console.error('[api/payout-runs/save-computed] upsertPayoutLines threw', {
+          runId: run.id,
+          payloadLength: payload.length,
+          error: upsertErr instanceof Error ? upsertErr.message : String(upsertErr),
+        });
+      }
+      throw upsertErr;
+    }
+
+    if (!upserted?.length) {
+      const detail =
+        payload.length === 0
+          ? 'upsertPayoutLines returned no records (payload was empty after transform)'
+          : `upsertPayoutLines returned no records (expected ${payload.length})`;
+      if (process.env.NODE_ENV === 'development' && typeof console !== 'undefined') {
+        console.error('[api/payout-runs/save-computed]', detail, { runId: run.id });
+      }
+      const res = NextResponse.json(
+        {
+          ok: false,
+          error: detail,
+          runId: run.id,
+          payload_length: payload.length,
+          requestId: reqId,
+        },
+        { status: 500 }
+      );
+      res.headers.set('request-id', reqId);
+      return res;
+    }
 
     await writeAuditLog({
       user_email: session.email,

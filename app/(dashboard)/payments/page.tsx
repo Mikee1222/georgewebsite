@@ -75,6 +75,12 @@ function PaymentMethodBlock({ method, isDefault }: { method: TeamMemberPaymentMe
             <dd className="font-mono text-white/80">{maskIbanOrAccount(method.iban_or_account)}</dd>
           </>
         )}
+        {method.bic_swift?.trim() && (
+          <>
+            <dt className="text-white/50">BIC / SWIFT</dt>
+            <dd className="font-mono text-white/80">{method.bic_swift.trim()}</dd>
+          </>
+        )}
         {method.revtag != null && method.revtag !== '' && (
           <>
             <dt className="text-white/50">Revtag</dt>
@@ -498,6 +504,7 @@ function fullPayoutString(m: TeamMemberPaymentMethod): string {
   parts.push((m.payout_method || m.method_type || 'payout').toString().trim());
   if (m.beneficiary_name?.trim()) parts.push('beneficiary: ' + m.beneficiary_name.trim());
   if (m.iban_or_account) parts.push('iban: ' + maskIbanOrAccount(m.iban_or_account));
+  if (m.bic_swift?.trim()) parts.push('bic: ' + m.bic_swift.trim());
   if (m.revtag?.trim()) parts.push('revtag: ' + m.revtag.trim().replace(/^@/, ''));
   return parts.join(' | ');
 }
@@ -767,6 +774,13 @@ function BreakdownRow({
                             </div>
                           </dd>
                         </div>
+                        {m.bic_swift?.trim() && (
+                          <div className="flex flex-wrap items-center gap-1 sm:col-span-2">
+                            <dt className="text-white/50 shrink-0">BIC / SWIFT</dt>
+                            <dd className="font-mono text-white/80">{m.bic_swift.trim()}</dd>
+                            <CopyButton label="BIC/SWIFT" text={m.bic_swift.trim()} fieldId={`${m.id}-bic`} copiedFieldId={copiedFieldId} onCopy={copyToClipboard} />
+                          </div>
+                        )}
                         {m.revtag != null && m.revtag !== '' && (
                           <div className="flex flex-wrap items-center gap-1 sm:col-span-2">
                             <dt className="text-white/50 shrink-0">Revtag</dt>
@@ -903,6 +917,7 @@ type PaymentMethodFormState = {
   payout_method: string;
   beneficiary_name: string;
   iban_or_account: string;
+  bic_swift: string;
   revtag: string;
   status: string;
   notes: string;
@@ -1018,6 +1033,27 @@ function PaymentMethodFormBlock({
           )}
         </div>
         <p className="mt-1 text-xs text-white/50">Full IBAN or account number for bank/Revolut/Wise.</p>
+      </div>
+      <div>
+        <label className="block text-xs font-medium text-white/60 mb-1">BIC / SWIFT (optional)</label>
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            value={form.bic_swift}
+            onChange={(e) => setForm((f) => ({ ...f, bic_swift: e.target.value }))}
+            className={`${glass} flex-1 font-mono`}
+            placeholder="e.g. REVOLT21"
+          />
+          {form.bic_swift?.trim() && (
+            <button
+              type="button"
+              onClick={() => copyFormField(form.bic_swift, 'bic')}
+              className="rounded border border-white/20 bg-white/5 px-2 py-1 text-xs text-white/70 hover:bg-white/10"
+            >
+              {formCopiedId === 'bic' ? 'Copied' : 'Copy'}
+            </button>
+          )}
+        </div>
       </div>
       {showRevtagField(form.payout_method) && (
         <div>
@@ -1181,11 +1217,12 @@ function PaymentsPageContent() {
     payout_method: string;
     beneficiary_name: string;
     iban_or_account: string;
+    bic_swift: string;
     revtag: string;
     status: string;
     notes: string;
     is_default: boolean;
-  }>({ method_label: 'primary', payout_method: '', beneficiary_name: '', iban_or_account: '', revtag: '', status: 'active', notes: '', is_default: false });
+  }>({ method_label: 'primary', payout_method: '', beneficiary_name: '', iban_or_account: '', bic_swift: '', revtag: '', status: 'active', notes: '', is_default: false });
   const [paymentMethodSaveBusy, setPaymentMethodSaveBusy] = useState(false);
   const [refreshRunDetailTrigger, setRefreshRunDetailTrigger] = useState(0);
   const [savePayoutsBusy, setSavePayoutsBusy] = useState(false);
@@ -2773,6 +2810,7 @@ function PaymentsPageContent() {
                                         payout_method: m.payout_method ?? '',
                                         beneficiary_name: m.beneficiary_name ?? '',
                                         iban_or_account: m.iban_or_account ?? '',
+                                        bic_swift: m.bic_swift ?? '',
                                         revtag: m.revtag ?? '',
                                         status: m.status ?? 'active',
                                         notes: m.notes ?? '',
@@ -2819,6 +2857,7 @@ function PaymentsPageContent() {
                             payout_method: '',
                             beneficiary_name: '',
                             iban_or_account: '',
+                            bic_swift: '',
                             revtag: '',
                             status: 'active',
                             notes: '',

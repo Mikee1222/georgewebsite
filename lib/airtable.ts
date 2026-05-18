@@ -172,7 +172,7 @@ const ALLOWED_KEYS_BY_TABLE: Record<string, Set<string>> = {
     'airbnbs', 'softwares', 'fx_withdrawal_fees', 'other_costs', 'notes_issues',
   ]),
   team_member_payment_methods: new Set([
-    'team_member', 'method_label', 'payout_method', 'beneficiary_name', 'iban_or_account',
+    'team_member', 'method_label', 'payout_method', 'beneficiary_name', 'iban_or_account', 'bic_swift',
     'revtag', 'status', 'notes', 'is_default',
   ]),
   // Linked model + week must match WEEKLY_FORECAST_READ_KEYS. unique_key is formula — reads request it; upsert omits it.
@@ -1977,6 +1977,7 @@ const PAYMENT_METHODS_FIELDS = [
   'payout_method',
   'beneficiary_name',
   'iban_or_account',
+  'bic_swift',
   'revtag',
   'status',
   'notes',
@@ -2045,6 +2046,7 @@ export async function createTeamMemberPaymentMethod(fields: {
   payout_method?: string;
   beneficiary_name?: string;
   iban_or_account?: string;
+  bic_swift?: string;
   revtag?: string;
   status?: string;
   notes?: string;
@@ -2062,6 +2064,7 @@ export async function createTeamMemberPaymentMethod(fields: {
     notes: fields.notes ?? '',
     is_default: Boolean(fields.is_default),
   };
+  if (fields.bic_swift !== undefined) payload.bic_swift = fields.bic_swift;
   return createRecord('team_member_payment_methods', payload) as Promise<AirtableRecord<TeamMemberPaymentMethodRecord>>;
 }
 
@@ -2072,6 +2075,7 @@ export async function updateTeamMemberPaymentMethod(
     payout_method: string;
     beneficiary_name: string;
     iban_or_account: string;
+    bic_swift: string;
     revtag: string;
     status: string;
     notes: string;
@@ -2087,6 +2091,7 @@ export async function updateTeamMemberPaymentMethod(
   if (fields.payout_method !== undefined) payload.payout_method = fields.payout_method;
   if (fields.beneficiary_name !== undefined) payload.beneficiary_name = fields.beneficiary_name;
   if (fields.iban_or_account !== undefined) payload.iban_or_account = fields.iban_or_account;
+  if (fields.bic_swift !== undefined) payload.bic_swift = fields.bic_swift;
   if (fields.revtag !== undefined) payload.revtag = fields.revtag;
   if (fields.status !== undefined) payload.status = fields.status;
   if (fields.notes !== undefined) payload.notes = fields.notes;
@@ -3090,15 +3095,31 @@ export async function upsertPayoutLines(
     breakdown_json?: string;
   }>
 ): Promise<AirtableRecord<PayoutLineRecord>[]> {
-  if (!runId?.trim()) return [];
-  const existing = await listPayoutLines(runId.trim());
+  if (!runId?.trim()) {
+    if (process.env.NODE_ENV === 'development' && typeof console !== 'undefined') {
+      console.warn('[airtable upsertPayoutLines] early return: missing or empty runId');
+    }
+    return [];
+  }
+  const runIdTrim = runId.trim();
+  const existing = await listPayoutLines(runIdTrim);
+  if (process.env.NODE_ENV === 'development' && typeof console !== 'undefined') {
+    console.log('[airtable upsertPayoutLines] attempting write', {
+      runId: runIdTrim,
+      incomingLines: lines.length,
+      existingToDelete: existing.length,
+    });
+  }
+  if (lines.length === 0 && process.env.NODE_ENV === 'development' && typeof console !== 'undefined') {
+    console.warn('[airtable upsertPayoutLines] incoming lines array is empty — will delete existing only');
+  }
   for (const rec of existing) {
     await deletePayoutLine(rec.id);
   }
   const created: AirtableRecord<PayoutLineRecord>[] = [];
   for (const line of lines) {
     const rec = await createPayoutLine({
-      payout_run_id: runId.trim(),
+      payout_run_id: runIdTrim,
       team_member_id: line.team_member_id,
       model_id: line.model_id,
       department: line.department,
@@ -3118,6 +3139,22 @@ export async function upsertPayoutLines(
       breakdown_json: line.breakdown_json,
     });
     created.push(rec);
+  }
+  if (process.env.NODE_ENV === 'development' && typeof console !== 'undefined') {
+    console.log('[airtable upsertPayoutLines] finished', {
+      runId: runIdTrim,
+      created: created.length,
+      expected: lines.length,
+    });
+    if (lines.length > 0 && created.length === 0) {
+      console.error('[airtable upsertPayoutLines] no records created despite non-empty lines input');
+    }
+    if (lines.length > 0 && created.length !== lines.length) {
+      console.warn('[airtable upsertPayoutLines] created count mismatch', {
+        expected: lines.length,
+        created: created.length,
+      });
+    }
   }
   return created;
 }

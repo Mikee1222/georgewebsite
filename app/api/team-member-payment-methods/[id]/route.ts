@@ -21,6 +21,7 @@ function toNormalized(rec: { id: string; fields: TeamMemberPaymentMethodRecord; 
     payout_method: f.payout_method ?? undefined,
     beneficiary_name: f.beneficiary_name ?? undefined,
     iban_or_account: f.iban_or_account ?? undefined,
+    bic_swift: f.bic_swift ?? undefined,
     revtag: f.revtag ?? undefined,
     status: f.status ?? undefined,
     notes: f.notes ?? undefined,
@@ -45,6 +46,7 @@ export async function PATCH(
     payout_method: string;
     beneficiary_name: string;
     iban_or_account: string;
+    bic_swift: string;
     revtag: string;
     status: string;
     notes: string;
@@ -74,6 +76,7 @@ export async function PATCH(
     if (body?.payout_method !== undefined) updates.payout_method = body.payout_method;
     if (body?.beneficiary_name !== undefined) updates.beneficiary_name = body.beneficiary_name;
     if (body?.iban_or_account !== undefined) updates.iban_or_account = body.iban_or_account;
+    if (body?.bic_swift !== undefined) updates.bic_swift = body.bic_swift;
     if (body?.revtag !== undefined) updates.revtag = body.revtag;
     if (body?.status !== undefined) updates.status = body.status;
     if (body?.notes !== undefined) updates.notes = body.notes;

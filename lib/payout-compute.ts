@@ -695,7 +695,7 @@ export async function computeLivePayoutsInRange(
   return { byModelId, byTeamMemberId, affiliateTotalUsd, totalPayoutUsd, itemCount };
 }
 
-/** Convert preview line to the payload shape expected by upsertPayoutLines (no id, no team_member_name). Model lines get model_id, department "models", role "model", and optional team_member (payee). */
+/** Convert preview line to the payload shape expected by upsertPayoutLines (no id, no team_member_name). Real model rows use synthetic id `model-rec…`; team members in the model tab keep their team_member id only. */
 export function previewLinesToUpsertPayload(
   lines: PayoutPreviewLine[]
 ): Array<{
@@ -703,6 +703,9 @@ export function previewLinesToUpsertPayload(
   model_id?: string;
   department?: string;
   role?: string;
+  category?: string;
+  /** Original preview team_member_id (for save validation); not written to Airtable. */
+  preview_team_member_id?: string;
   payout_type?: string;
   payout_percentage?: number;
   payout_flat_fee?: number;
@@ -716,26 +719,41 @@ export function previewLinesToUpsertPayload(
   amount_usd?: number;
   breakdown_json?: string;
 }> {
-  return lines.map((l) => {
-    const isModel = l.category === 'model' || (l.team_member_id ?? '').startsWith('model-');
-    const modelId = isModel ? (l.team_member_id ?? '').replace(/^model-/, '') : undefined;
-    return {
-      team_member_id: isModel ? (l.payee_team_member_id ?? undefined) : l.team_member_id,
-      model_id: modelId || undefined,
-      department: isModel ? 'models' : l.department,
-      role: isModel ? 'model' : l.role,
-      payout_type: l.payout_type,
-      payout_percentage: l.payout_percentage,
-      payout_flat_fee: l.payout_flat_fee,
-      basis_webapp_amount: l.basis_webapp_amount,
-      basis_manual_amount: l.basis_manual_amount,
-      bonus_amount: l.bonus_amount,
-      adjustments_amount: l.adjustments_amount,
-      basis_total: l.basis_total,
-      payout_amount: l.payout_amount,
-      amount_eur: l.amount_eur ?? undefined,
-      amount_usd: l.amount_usd ?? undefined,
-      breakdown_json: l.breakdown_json,
-    };
-  });
+  return lines
+    .filter((l) => {
+      const dept = (l.department ?? '').trim();
+      const previewTid = (l.team_member_id ?? '').trim();
+      const isOrphanModelCategoryMember =
+        l.category === 'model' &&
+        !previewTid.startsWith('model-') &&
+        (dept === '' || dept.toLowerCase() === 'ops');
+      return !isOrphanModelCategoryMember;
+    })
+    .map((l) => {
+      const previewTid = (l.team_member_id ?? '').trim();
+      const isSyntheticModelLine = previewTid.startsWith('model-');
+      const strippedId = isSyntheticModelLine ? previewTid.replace(/^model-/, '') : '';
+      const modelId = isSyntheticModelLine && strippedId.startsWith('rec') ? strippedId : undefined;
+      const isModelsTableRow = modelId != null;
+      return {
+        team_member_id: isModelsTableRow ? (l.payee_team_member_id ?? undefined) : l.team_member_id,
+        model_id: modelId,
+        department: isModelsTableRow ? 'models' : l.department,
+        role: isModelsTableRow ? 'model' : l.role,
+        category: l.category,
+        preview_team_member_id: l.team_member_id,
+        payout_type: l.payout_type,
+        payout_percentage: l.payout_percentage,
+        payout_flat_fee: l.payout_flat_fee,
+        basis_webapp_amount: l.basis_webapp_amount,
+        basis_manual_amount: l.basis_manual_amount,
+        bonus_amount: l.bonus_amount,
+        adjustments_amount: l.adjustments_amount,
+        basis_total: l.basis_total,
+        payout_amount: l.payout_amount,
+        amount_eur: l.amount_eur ?? undefined,
+        amount_usd: l.amount_usd ?? undefined,
+        breakdown_json: l.breakdown_json,
+      };
+    });
 }

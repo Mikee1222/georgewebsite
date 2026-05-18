@@ -18,6 +18,7 @@ function toMethod(rec: AirtableRecord<TeamMemberPaymentMethodRecord>): TeamMembe
     payout_method: f.payout_method ?? undefined,
     beneficiary_name: f.beneficiary_name ?? undefined,
     iban_or_account: f.iban_or_account ?? undefined,
+    bic_swift: f.bic_swift ?? undefined,
     revtag: f.revtag ?? undefined,
     status: f.status ?? undefined,
     notes: f.notes ?? undefined,

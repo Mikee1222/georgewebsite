@@ -613,6 +613,7 @@ export interface TeamMemberPaymentMethodRecord {
   payout_method?: string;
   beneficiary_name?: string;
   iban_or_account?: string;
+  bic_swift?: string;
   revtag?: string;
   status?: string;
   notes?: string;
@@ -634,6 +635,7 @@ export interface TeamMemberPaymentMethod {
   payout_method?: string;
   beneficiary_name?: string;
   iban_or_account?: string;
+  bic_swift?: string;
   revtag?: string;
   status?: string;
   notes?: string;

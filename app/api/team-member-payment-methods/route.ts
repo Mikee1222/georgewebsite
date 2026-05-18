@@ -26,6 +26,7 @@ function toNormalized(rec: AirtableRecord<TeamMemberPaymentMethodRecord>): TeamM
     payout_method: f.payout_method ?? undefined,
     beneficiary_name: f.beneficiary_name ?? undefined,
     iban_or_account: f.iban_or_account ?? undefined,
+    bic_swift: f.bic_swift ?? undefined,
     revtag: f.revtag ?? undefined,
     status: f.status ?? undefined,
     notes: f.notes ?? undefined,
@@ -106,6 +107,7 @@ export async function POST(request: NextRequest) {
     payout_method?: string;
     beneficiary_name?: string;
     iban_or_account?: string;
+    bic_swift?: string;
     revtag?: string;
     status?: string;
     notes?: string;
@@ -135,6 +137,7 @@ export async function POST(request: NextRequest) {
       payout_method: body.payout_method,
       beneficiary_name: body.beneficiary_name,
       iban_or_account: body.iban_or_account,
+      bic_swift: body.bic_swift,
       revtag: body.revtag,
       status: body.status,
       notes: body.notes,
