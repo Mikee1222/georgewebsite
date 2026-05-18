@@ -566,7 +566,7 @@ function BreakdownRow({
   onManagePayment: () => void;
   onToggleBreakdown: () => void;
   isBreakdownExpanded: boolean;
-  /** Affiliates tab: only Member, %, Payout, Payment, Actions (basis columns hidden). */
+  /** Affiliates tab: Member, %, Payout, Payment, Paid, Actions (basis columns hidden). */
   compactAffiliate?: boolean;
 }) {
   const [copiedFieldId, setCopiedFieldId] = useState<string | null>(null);
@@ -590,7 +590,40 @@ function BreakdownRow({
   const paymentLabel = paymentSummaryLabel(paymentMethods);
   const hasPayee = payeeId != null && payeeId !== '';
   const compact = compactAffiliate === true;
-  const colSpan = compact ? 5 : 15;
+  const colSpan = compact ? 6 : 15;
+
+  const paidStatusCell = (
+    <td className="py-3 px-4">
+      {onPaidToggle ? (
+        <button
+          type="button"
+          onClick={() => onPaidToggle(row.id, row.paid_status ?? 'pending')}
+          disabled={busy}
+          className={`inline-flex items-center gap-1.5 rounded-full px-4 py-1.5 text-sm font-medium transition-all duration-200 shadow-inner disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer ${
+            isPaid
+              ? 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30 hover:border-emerald-400'
+              : 'border border-zinc-600 bg-zinc-900/40 text-zinc-300 hover:border-[var(--purple-500)] hover:bg-[var(--purple-500)]/10'
+          }`}
+        >
+          {busy ? (
+            '…'
+          ) : isPaid ? (
+            <>
+              <span aria-hidden>✓</span>
+              Paid
+            </>
+          ) : (
+            <>
+              <span aria-hidden>💳</span>
+              Pay
+            </>
+          )}
+        </button>
+      ) : (
+        <span className={isPaid ? 'text-emerald-400' : 'text-white/70'}>{isPaid ? 'Paid' : 'Pending'}</span>
+      )}
+    </td>
+  );
 
   return (
     <>
@@ -615,6 +648,7 @@ function BreakdownRow({
                 <PaymentCellContent methods={paymentMethods} />
               )}
             </td>
+            {paidStatusCell}
           </>
         ) : (
           <>
@@ -641,36 +675,7 @@ function BreakdownRow({
           />
         </td>
         <td className="py-3 px-4 text-white/70">{currencyDisplay}</td>
-        <td className="py-3 px-4">
-          {onPaidToggle ? (
-            <button
-              type="button"
-              onClick={() => onPaidToggle(row.id, row.paid_status ?? 'pending')}
-              disabled={busy}
-              className={`inline-flex items-center gap-1.5 rounded-full px-4 py-1.5 text-sm font-medium transition-all duration-200 shadow-inner disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer ${
-                isPaid
-                  ? 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30 hover:border-emerald-400'
-                  : 'border border-zinc-600 bg-zinc-900/40 text-zinc-300 hover:border-[var(--purple-500)] hover:bg-[var(--purple-500)]/10'
-              }`}
-            >
-              {busy ? (
-                '…'
-              ) : isPaid ? (
-                <>
-                  <span aria-hidden>✓</span>
-                  Paid
-                </>
-              ) : (
-                <>
-                  <span aria-hidden>💳</span>
-                  Pay
-                </>
-              )}
-            </button>
-          ) : (
-            <span className={isPaid ? 'text-emerald-400' : 'text-white/70'}>{isPaid ? 'Paid' : 'Pending'}</span>
-          )}
-        </td>
+        {paidStatusCell}
         <td className="py-3 px-4">
           {paymentMethods.length === 0 ? (
             <span className="text-sm text-white/50">no methods</span>
@@ -2636,6 +2641,7 @@ function PaymentsPageContent() {
                                 <th className="py-3 px-4 text-right text-xs font-semibold uppercase tracking-wider text-white/80">%</th>
                                 <th className="py-3 px-4 text-right text-xs font-semibold uppercase tracking-wider text-white/80">Payout</th>
                                 <th className="py-3 px-4 text-left text-xs font-semibold uppercase tracking-wider text-white/80">Payment</th>
+                                <th className="py-3 px-4 text-left text-xs font-semibold uppercase tracking-wider text-white/80">Paid</th>
                               </>
                             ) : (
                               <>
